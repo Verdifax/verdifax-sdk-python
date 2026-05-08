@@ -41,6 +41,7 @@ from .models import (
     ExecutionManifest,
     StageResult,
 )
+from . import section0  # §0 cross-language canonical hash verifier
 
 
 def from_env(
