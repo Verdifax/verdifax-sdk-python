@@ -37,6 +37,7 @@ def _success_handler(captured: dict | None = None):
             captured["request"] = request
             captured["body"] = json.loads(request.content) if request.content else None
         return httpx.Response(200, json=make_execute_response())
+
     return handler
 
 
@@ -103,6 +104,7 @@ def test_health_returns_dict():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/health"
         return httpx.Response(200, json={"ok": True, "service": "verdifax-orchestrator-api"})
+
     client = _client_with(handler)
     assert client.health() == {"ok": True, "service": "verdifax-orchestrator-api"}
 
@@ -188,6 +190,7 @@ def test_stage_failure_raises_stage_error():
             422,
             json={"ok": False, "error": "DOG rejected", "error_stage": "DOG"},
         )
+
     client = _client_with(handler)
     with pytest.raises(StageError) as exc_info:
         client.attest(
@@ -203,6 +206,7 @@ def test_stage_failure_raises_stage_error():
 def test_non_stage_5xx_raises_api_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "server boom"})
+
     client = _client_with(handler)
     with pytest.raises(APIError) as exc_info:
         client.attest(
@@ -218,6 +222,7 @@ def test_non_stage_5xx_raises_api_error():
 def test_response_missing_manifest_raises_api_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ok": True, "duration_ms": 1})
+
     client = _client_with(handler)
     with pytest.raises(APIError):
         client.attest(
@@ -231,6 +236,7 @@ def test_response_missing_manifest_raises_api_error():
 def test_transport_error_translated_to_connection_error():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("simulated DNS failure")
+
     client = _client_with(handler)
     with pytest.raises(VerdifaxConnectionError):
         client.attest(

@@ -89,10 +89,7 @@ def _validate_hex64(value: str, name: str) -> None:
         )
     for ch in value:
         if ch not in "0123456789abcdef":
-            raise ValueError(
-                f"section0: {name} must be lowercase hex (0-9a-f); "
-                f"found {ch!r}"
-            )
+            raise ValueError(f"section0: {name} must be lowercase hex (0-9a-f); " f"found {ch!r}")
 
 
 # ── DSE — Deterministic State Engine dispatch hash ──────────────────────
@@ -138,8 +135,7 @@ def dse_dispatch_hash(
     _validate_hex64(program_id, "program_id")
     _validate_hex64(registry_record_hash, "registry_record_hash")
     preimage = (
-        f"{DSE_FORMULA_VERSION}.{envelope_id}.{sequence_id}."
-        f"{program_id}.{registry_record_hash}"
+        f"{DSE_FORMULA_VERSION}.{envelope_id}.{sequence_id}." f"{program_id}.{registry_record_hash}"
     )
     return _sha256_hex(preimage.encode("utf-8"))
 

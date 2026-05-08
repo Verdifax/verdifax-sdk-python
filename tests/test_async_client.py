@@ -33,6 +33,7 @@ def _success_handler(captured: dict | None = None):
             captured["request"] = request
             captured["body"] = json.loads(request.content) if request.content else None
         return httpx.Response(200, json=make_execute_response())
+
     return handler
 
 
@@ -55,6 +56,7 @@ async def test_async_attest_success_returns_receipt():
 async def test_async_health_returns_dict():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ok": True})
+
     async with _async_client_with(handler) as client:
         result = await client.health()
     assert result == {"ok": True}
@@ -126,6 +128,7 @@ async def test_async_stage_failure_raises_stage_error():
             422,
             json={"ok": False, "error": "ZKSP rejected", "error_stage": "ZKSP"},
         )
+
     async with _async_client_with(handler) as client:
         with pytest.raises(StageError) as exc_info:
             await client.attest(
@@ -141,6 +144,7 @@ async def test_async_stage_failure_raises_stage_error():
 async def test_async_500_raises_api_error_not_stage_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "boom"})
+
     async with _async_client_with(handler) as client:
         with pytest.raises(APIError) as exc_info:
             await client.attest(
@@ -156,6 +160,7 @@ async def test_async_500_raises_api_error_not_stage_error():
 async def test_async_transport_error_translated_to_connection_error():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("simulated DNS failure")
+
     async with _async_client_with(handler) as client:
         with pytest.raises(VerdifaxConnectionError):
             await client.attest(

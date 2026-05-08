@@ -148,8 +148,10 @@ class ExecutionManifest(_AliasedModel):
                 artifacts={
                     "epa_hash": self.epa_hash,
                     "efa_hash": self.efa_hash,
-                    **{f"execution_id_{name}": exec_id
-                       for name, exec_id in self.kernel_executions().items()},
+                    **{
+                        f"execution_id_{name}": exec_id
+                        for name, exec_id in self.kernel_executions().items()
+                    },
                 },
             ),
             StageResult(
@@ -217,7 +219,9 @@ class AttestationReceipt(_AliasedModel):
     """
 
     ok: bool = True
-    run_id: Optional[int] = Field(default=None, description="server-side run ID from /runs (Phase 3+)")
+    run_id: Optional[int] = Field(
+        default=None, description="server-side run ID from /runs (Phase 3+)"
+    )
     duration_ms: int = Field(..., ge=0)
     manifest_hash: str
     manifest: ExecutionManifest
@@ -310,9 +314,12 @@ class AttestedContext(_AliasedModel):
         the presence of the other fields rather than being something
         the caller has to remember to set.
         """
+        # Pydantic v2.11+ deprecates accessing model_fields on the
+        # instance — must access through the class instead. Resolved
+        # via type(self) so the same code path works for any subclass.
         any_set = any(
             getattr(self, fld) not in (None, "", False)
-            for fld in self.model_fields
+            for fld in type(self).model_fields
             if fld != "attested"
         )
         return self.model_copy(update={"attested": bool(any_set)})

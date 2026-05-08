@@ -24,6 +24,7 @@ def _success_transport(captured: dict | None = None):
             captured["request"] = request
             captured["body"] = json.loads(request.content) if request.content else None
         return httpx.Response(200, json=make_execute_response())
+
     return httpx.MockTransport(handler)
 
 
@@ -102,9 +103,7 @@ def test_claude_and_openai_helpers_produce_distinct_payloads():
 
 def test_helpers_decode_utf8_bytes_response():
     captured: dict = {}
-    client = VerdifaxClient(
-        base_url="http://test.invalid", transport=_success_transport(captured)
-    )
+    client = VerdifaxClient(base_url="http://test.invalid", transport=_success_transport(captured))
     attest_openai_response(
         prompt="P",
         response=b"hello",

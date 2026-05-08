@@ -24,9 +24,9 @@ def test_validate_hex64_accepts_canonical_value():
         "",
         "a" * 63,
         "a" * 65,
-        "A" * 64,           # uppercase
-        "g" * 64,           # non-hex char
-        "0" * 63 + "Z",     # invalid char at end
+        "A" * 64,  # uppercase
+        "g" * 64,  # non-hex char
+        "0" * 63 + "Z",  # invalid char at end
     ],
 )
 def test_validate_hex64_rejects_invalid_values(value):

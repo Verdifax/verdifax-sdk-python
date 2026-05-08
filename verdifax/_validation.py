@@ -20,9 +20,7 @@ def validate_hex64(value: str, field_name: str) -> None:
     if not isinstance(value, str):
         raise ValidationError(f"{field_name} must be a string, got {type(value).__name__}")
     if len(value) != 64:
-        raise ValidationError(
-            f"{field_name} must be 64-char hex, got {len(value)} chars"
-        )
+        raise ValidationError(f"{field_name} must be 64-char hex, got {len(value)} chars")
     lowered = value.lower()
     if lowered != value:
         raise ValidationError(f"{field_name} must be lowercase hex")
@@ -53,9 +51,7 @@ def normalize_payload(payload: Union[str, bytes]) -> tuple[str, str]:
             import base64
 
             return "", base64.b64encode(payload).decode("ascii")
-    raise ValidationError(
-        f"payload must be str or bytes, got {type(payload).__name__}"
-    )
+    raise ValidationError(f"payload must be str or bytes, got {type(payload).__name__}")
 
 
 __all__ = ["normalize_payload", "validate_hex64", "validate_route_id"]

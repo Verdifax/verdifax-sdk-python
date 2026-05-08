@@ -22,12 +22,19 @@ _RESPONSE_PREFIX = "verdifax.helper.response.v1"
 
 def _format_payload(provider: str, prompt: str, response: Union[str, bytes]) -> str:
     if isinstance(response, bytes):
+        # Keep the bytes value typed as bytes for the except branch so
+        # mypy can resolve b64encode's argument type. Reassigning
+        # ``response`` to str inside the try-block narrows the union but
+        # also widens the binding back to ``Union[str, bytes]`` in the
+        # except branch — capturing the raw bytes separately keeps the
+        # type discriminator clean.
+        raw_bytes = response
         try:
-            response = response.decode("utf-8")
+            response = raw_bytes.decode("utf-8")
         except UnicodeDecodeError:
             import base64
 
-            response = "base64:" + base64.b64encode(response).decode("ascii")
+            response = "base64:" + base64.b64encode(raw_bytes).decode("ascii")
     return _RECORD_SEP.join(
         [
             f"verdifax.helper.{provider}.v1",

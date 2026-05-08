@@ -45,18 +45,14 @@ DSE_FIXTURE_ENVELOPE = "env-fixture-v1-aaaaaaaaaaaaaaaa"
 DSE_FIXTURE_SEQUENCE = "seq-fixture-v1-1"
 DSE_FIXTURE_PROGRAM = "1" * 64
 DSE_FIXTURE_REGISTRY = "2" * 64
-DSE_EXPECTED_HASH = (
-    "e66378381a9dea8ee0475ddc5b55a81f256aac523dd523c02c08e25ab34bae6b"
-)
+DSE_EXPECTED_HASH = "e66378381a9dea8ee0475ddc5b55a81f256aac523dd523c02c08e25ab34bae6b"
 
 DCAE_FIXTURE_MANIFEST = "3" * 64
 DCAE_FIXTURE_AER = "4" * 64
 DCAE_FIXTURE_ENVELOPE = "env-fixture-dcae-v1"
 DCAE_FIXTURE_ZKSP = "5" * 64
 DCAE_FIXTURE_STATUS = "VERIFIED_SOUND_COMPLETE_ZK"
-DCAE_EXPECTED_HASH = (
-    "e34cee0fcc6ebf9eafc3ef5479fd0fffd5a4de5c60039ba42b009f0c05b8fc93"
-)
+DCAE_EXPECTED_HASH = "e34cee0fcc6ebf9eafc3ef5479fd0fffd5a4de5c60039ba42b009f0c05b8fc93"
 
 CRES_FIXTURE_ENVELOPE = "env-fixture-cres-v1"
 CRES_FIXTURE_FIELD = "request.payload.customer_email"
@@ -64,9 +60,7 @@ CRES_FIXTURE_CLOCK = "2026-05-07T00:00:00.000000000Z"
 CRES_FIXTURE_ACTOR = "ops-fixture"
 CRES_FIXTURE_CIPHERTEXT = "6" * 64
 CRES_FIXTURE_DSAR = "DSAR-FIXTURE-001"
-CRES_EXPECTED_HASH = (
-    "1bb128c1f86cc6c7d63d44cc49bbdfc1185c8105d5bc270838af63814901bee5"
-)
+CRES_EXPECTED_HASH = "1bb128c1f86cc6c7d63d44cc49bbdfc1185c8105d5bc270838af63814901bee5"
 
 
 # ── Drift-protection: byte-equality with Go ──────────────────────────
@@ -266,14 +260,8 @@ def test_cres_rejects_short_ciphertext_hash() -> None:
 # parent repo).
 
 VECTORS_DIR_CANDIDATES = [
-    Path(__file__).resolve().parents[2]
-    / "BUILDING DOCS"
-    / "SECTION-0-SPECS"
-    / "test-vectors",
-    Path(__file__).resolve().parents[3]
-    / "BUILDING DOCS"
-    / "SECTION-0-SPECS"
-    / "test-vectors",
+    Path(__file__).resolve().parents[2] / "BUILDING DOCS" / "SECTION-0-SPECS" / "test-vectors",
+    Path(__file__).resolve().parents[3] / "BUILDING DOCS" / "SECTION-0-SPECS" / "test-vectors",
 ]
 
 

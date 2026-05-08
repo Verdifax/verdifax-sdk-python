@@ -104,6 +104,7 @@ def test_manifest_rejects_negative_artifact_count(manifest_dict):
 
 # ── AttestedContext ────────────────────────────────────────────────────────
 
+
 def test_attested_context_default_is_unattested():
     ctx = AttestedContext()
     assert ctx.attested is False
