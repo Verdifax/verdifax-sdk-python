@@ -346,6 +346,18 @@ class ExecuteRequest(_AliasedModel):
         default=None,
         description="Caller-attested actor / model / decision block (optional).",
     )
+    # Reproducibility context — caller-declared runtime fingerprint
+    # (container image hash, runtime version, pinned deps, git SHA,
+    # random seeds, platform). Optional. Serialized to the JSON
+    # field "reproducibility_context" which the orchestrator binds
+    # into the audit bundle (Category 6). Built via
+    # :func:`verdifax.research.capture_environment` or constructed
+    # manually. Typed as ``dict`` here to avoid a forward import on
+    # ``verdifax.research``; the structure is validated server-side.
+    reproducibility_context: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Caller-declared runtime fingerprint (optional).",
+    )
 
     def model_dump_request(self) -> dict[str, Any]:
         """Serialize to the JSON shape the API expects (snake_case, no nulls)."""

@@ -109,6 +109,7 @@ class VerdifaxClient:
         route_id: str,
         registry_record_hash: str,
         attested_context: Optional[AttestedContext] = None,
+        reproducibility_context: Optional[Any] = None,
     ) -> AttestationReceipt:
         """Run the nine-stage pipeline against ``payload`` and return a receipt.
 
@@ -124,6 +125,14 @@ class VerdifaxClient:
                 schema. When omitted, the run is recorded as
                 ``self_attested_deterministic`` (no actor or model
                 declared).
+            reproducibility_context: Optional
+                :class:`verdifax.research.ReproducibilityContext`
+                instance carrying the caller-declared runtime
+                fingerprint (container image hash, language pins,
+                git SHA, etc.). Bound into the bundle's Category-6
+                section. Build via
+                :func:`verdifax.research.capture_environment` for
+                auto-detection.
 
         Returns:
             An :class:`AttestationReceipt` containing the sealed manifest.
@@ -140,6 +149,7 @@ class VerdifaxClient:
             route_id=route_id,
             registry_record_hash=registry_record_hash,
             attested_context=attested_context,
+            reproducibility_context=reproducibility_context,
         )
         try:
             response = self._http.post("/execute", json=request_body)
@@ -211,6 +221,7 @@ class VerdifaxClient:
         route_id: str,
         registry_record_hash: str,
         attested_context: Optional[AttestedContext] = None,
+        reproducibility_context: Optional[Any] = None,
     ) -> dict[str, Any]:
         validate_hex64(program_id, "program_id")
         validate_hex64(registry_record_hash, "registry_record_hash")
@@ -221,6 +232,30 @@ class VerdifaxClient:
         # convention) so callers don't have to remember to set it.
         if attested_context is not None:
             attested_context = attested_context.with_auto_attested()
+        # Reproducibility context — serialize to dict if a typed model
+        # was supplied; pass dicts through unchanged so the structure
+        # is also accessible from non-research call sites.
+        repro_dict: Optional[dict[str, Any]] = None
+        if reproducibility_context is not None:
+            if hasattr(reproducibility_context, "with_auto_declared"):
+                # It's a ReproducibilityContext instance — auto-derive
+                # the declared flag, then dump to JSON-compatible dict.
+                ctx = reproducibility_context.with_auto_declared()
+                repro_dict = ctx.model_dump(mode="json", exclude_none=True)
+            elif isinstance(reproducibility_context, dict):
+                repro_dict = reproducibility_context
+            else:
+                # Best-effort: try .model_dump() on any pydantic-shaped
+                # object the caller passed in; otherwise raise.
+                if hasattr(reproducibility_context, "model_dump"):
+                    repro_dict = reproducibility_context.model_dump(
+                        mode="json", exclude_none=True
+                    )
+                else:
+                    raise TypeError(
+                        "reproducibility_context must be a "
+                        "verdifax.research.ReproducibilityContext or a dict"
+                    )
         request = ExecuteRequest(
             payload_text=payload_text or None,
             payload=payload_b64 or None,
@@ -228,6 +263,7 @@ class VerdifaxClient:
             route_id=route_id,
             registry_record_hash=registry_record_hash,
             attested_context=attested_context,
+            reproducibility_context=repro_dict,
         )
         return request.model_dump_request()
 

@@ -41,6 +41,7 @@ from .models import (
     ExecutionManifest,
     StageResult,
 )
+from . import research  # reproducible-research toolkit (Option B Phase 3)
 from . import section0  # §0 cross-language canonical hash verifier
 
 
@@ -143,5 +144,6 @@ __all__ = [
     "attest_claude_response",
     "attest_openai_response",
     "from_env",
+    "research",
     "verify",
 ]
