@@ -248,9 +248,7 @@ class VerdifaxClient:
                 # Best-effort: try .model_dump() on any pydantic-shaped
                 # object the caller passed in; otherwise raise.
                 if hasattr(reproducibility_context, "model_dump"):
-                    repro_dict = reproducibility_context.model_dump(
-                        mode="json", exclude_none=True
-                    )
+                    repro_dict = reproducibility_context.model_dump(mode="json", exclude_none=True)
                 else:
                     raise TypeError(
                         "reproducibility_context must be a "
