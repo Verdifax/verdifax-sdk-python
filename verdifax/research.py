@@ -250,7 +250,22 @@ def _enumerate_dependencies() -> List[str]:
     pinned = []
     try:
         for dist in metadata.distributions():
-            name = dist.metadata.get("Name") or dist.metadata.get("name")
+            # PackageMetadata in newer Python typing stubs doesn't expose
+            # .get() as a typed method, but __getitem__ is stable across
+            # 3.9 (where dist.metadata is an email.message.Message) and
+            # 3.10+ (where it's a PackageMetadata protocol). Try the
+            # canonical 'Name' key first, fall back to 'name' for
+            # PEP-handling quirks, swallow missing-key cases.
+            name = None
+            try:
+                name = dist.metadata["Name"]
+            except (KeyError, TypeError):
+                pass
+            if not name:
+                try:
+                    name = dist.metadata["name"]
+                except (KeyError, TypeError):
+                    pass
             version = dist.version
             if not name or not version:
                 continue
