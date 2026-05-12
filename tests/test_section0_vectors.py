@@ -33,7 +33,6 @@ from verdifax.section0 import (
     dse_dispatch_hash,
 )
 
-
 # ── Fixture: Go-side authoritative values ────────────────────────────
 #
 # These mirror ``internal/section0audit/vectors_test.go`` byte-for-byte.

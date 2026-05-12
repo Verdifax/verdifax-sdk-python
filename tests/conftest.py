@@ -11,7 +11,6 @@ from typing import Any
 
 import pytest
 
-
 PROGRAM_ID = "a" * 64
 ROUTE_ID = "route-test"
 REGISTRY_RECORD_HASH = "b" * 64

@@ -9,7 +9,6 @@ import pytest
 from verdifax._validation import normalize_payload, validate_hex64, validate_route_id
 from verdifax.exceptions import ValidationError
 
-
 # ── validate_hex64 ─────────────────────────────────────────────────────────────
 
 

@@ -55,7 +55,6 @@ from __future__ import annotations
 import hashlib
 from typing import Final
 
-
 # ── §0 invariants ───────────────────────────────────────────────────────
 #
 # Every kernel's canonical preimage is UTF-8 bytes with no BOM, no
