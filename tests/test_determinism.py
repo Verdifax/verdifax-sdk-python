@@ -1,6 +1,6 @@
 """Determinism tests: identical inputs must produce identical request bodies.
 
-These tests don't require a live API — the orchestrator's determinism is
+These tests don't require a live API, the orchestrator's determinism is
 the responsibility of the Go pipeline. What the SDK guarantees is that
 **the request body** it sends is byte-for-byte identical given identical
 inputs (so any non-determinism in resulting manifest hashes is upstream).

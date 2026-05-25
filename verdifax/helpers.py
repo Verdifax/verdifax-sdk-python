@@ -26,7 +26,7 @@ def _format_payload(provider: str, prompt: str, response: Union[str, bytes]) -> 
         # mypy can resolve b64encode's argument type. Reassigning
         # ``response`` to str inside the try-block narrows the union but
         # also widens the binding back to ``Union[str, bytes]`` in the
-        # except branch — capturing the raw bytes separately keeps the
+        # except branch, capturing the raw bytes separately keeps the
         # type discriminator clean.
         raw_bytes = response
         try:

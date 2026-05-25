@@ -54,7 +54,7 @@ Typical use::
 The auto-capture functions are best-effort: they swallow any
 exception and leave the corresponding field blank rather than
 fail the call. The orchestrator records empty values as "not
-declared" — better than fabricating an environment claim.
+declared", better than fabricating an environment claim.
 """
 
 from __future__ import annotations
@@ -243,7 +243,7 @@ def _enumerate_dependencies() -> List[str]:
     """
     try:
         from importlib import metadata
-    except ImportError:  # pragma: no cover — only Python 2.x and absurdly old
+    except ImportError:  # pragma: no cover, only Python 2.x and absurdly old
         return []
 
     pinned = []
@@ -366,7 +366,7 @@ class DeterminismDiff(BaseModel):
 class DeterminismResult(BaseModel):
     """Top-level response from POST /execute/verify-determinism.
 
-    Use :attr:`deterministic` as the primary signal — it's grounded
+    Use :attr:`deterministic` as the primary signal, it's grounded
     on manifest-hash equality, which is the canonical seal of the
     pipeline output. Bundle-hash differences are surfaced in
     :attr:`diff` as informational metadata (server-observed timing
@@ -383,7 +383,7 @@ class DeterminismResult(BaseModel):
 
 
 def verify_determinism(
-    client: Any,  # VerdifaxClient — Any to avoid circular import
+    client: Any,  # VerdifaxClient, Any to avoid circular import
     payload: Union[str, bytes],
     program_id: str,
     route_id: str,
@@ -401,7 +401,7 @@ def verify_determinism(
     ``/runs/{id}``-retrievable records.
 
     The top-level :attr:`DeterminismResult.deterministic` flag is
-    grounded on **manifest hash** equality — the canonical seal of
+    grounded on **manifest hash** equality, the canonical seal of
     the pipeline output. Bundle-hash differences (when surfaced in
     :attr:`DeterminismResult.diff.differing_fields`) indicate
     server-observed timing variation, not a non-deterministic
@@ -424,7 +424,7 @@ def verify_determinism(
         A :class:`DeterminismResult` with the comparison summary.
 
     Raises:
-        ValidationError, StageError, APIError, ConnectionError — same
+        ValidationError, StageError, APIError, ConnectionError, same
         as :meth:`VerdifaxClient.attest`.
     """
     validate_hex64(program_id, "program_id")

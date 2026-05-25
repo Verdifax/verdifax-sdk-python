@@ -116,7 +116,7 @@ class AsyncVerdifaxClient:
     ) -> AttestationReceipt:
         """Async version of :meth:`VerdifaxClient.attest`.
 
-        Accepts the same optional ``attested_context`` block —
+        Accepts the same optional ``attested_context`` block , 
         see :class:`verdifax.models.AttestedContext`.
         """
         request_body = self._build_execute_body(

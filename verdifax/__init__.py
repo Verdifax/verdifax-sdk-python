@@ -1,4 +1,4 @@
-"""Verdifax — cryptographic attestation for AI inference.
+"""Verdifax, cryptographic attestation for AI inference.
 
 Three-line integration:
 
@@ -83,7 +83,7 @@ def attest(
     a :class:`VerdifaxClient` yourself and reuse its connection pool.
 
     Pass ``attested_context`` to record a caller-attested actor / model /
-    decision block into the run's EPA artifact — see
+    decision block into the run's EPA artifact, see
     :class:`AttestedContext`.
     """
     with from_env(base_url=base_url, api_key=api_key, timeout=timeout) as client:

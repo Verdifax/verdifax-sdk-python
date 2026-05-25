@@ -232,13 +232,13 @@ class VerdifaxClient:
         # convention) so callers don't have to remember to set it.
         if attested_context is not None:
             attested_context = attested_context.with_auto_attested()
-        # Reproducibility context — serialize to dict if a typed model
+        # Reproducibility context, serialize to dict if a typed model
         # was supplied; pass dicts through unchanged so the structure
         # is also accessible from non-research call sites.
         repro_dict: Optional[dict[str, Any]] = None
         if reproducibility_context is not None:
             if hasattr(reproducibility_context, "with_auto_declared"):
-                # It's a ReproducibilityContext instance — auto-derive
+                # It's a ReproducibilityContext instance, auto-derive
                 # the declared flag, then dump to JSON-compatible dict.
                 ctx = reproducibility_context.with_auto_declared()
                 repro_dict = ctx.model_dump(mode="json", exclude_none=True)

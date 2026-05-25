@@ -75,7 +75,7 @@ git tag -a v0.1.0 -m "Release 0.1.0"
 git push origin v0.1.0
 ```
 
-The `release.yml` workflow will additionally publish from CI when the tag arrives, but it is idempotent — PyPI rejects duplicate uploads, so if you already pushed manually the CI run will safely no-op on the upload step.
+The `release.yml` workflow will additionally publish from CI when the tag arrives, but it is idempotent, PyPI rejects duplicate uploads, so if you already pushed manually the CI run will safely no-op on the upload step.
 
 ## 8. Smoke-test the published package
 

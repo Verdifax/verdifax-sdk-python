@@ -1,4 +1,4 @@
-"""§0 cross-language canonical hash verifier — Python implementation.
+"""§0 cross-language canonical hash verifier, Python implementation.
 
 This module exposes the three canonical preimage formulas used by the
 Verdifax orchestrator's §0 attestation contract: DSE (Deterministic
@@ -6,7 +6,7 @@ State Engine dispatch), DCAE (Deterministic Closure-and-Audit Engine),
 and CRES (Cryptographic Record Erasure System receipts).
 
 The Go orchestrator at ``api.verdifax.com`` is the authoritative source
-for these formulas — every formula here mirrors the corresponding Go
+for these formulas, every formula here mirrors the corresponding Go
 implementation byte-for-byte. The shared test vectors at
 ``BUILDING DOCS/SECTION-0-SPECS/test-vectors/`` are the contract: any
 language implementation that claims §0 compliance MUST produce the
@@ -14,7 +14,7 @@ same hash from the same input.
 
 Why this exists in the Python SDK:
 
-* Cross-language verifiability is core to the Verdifax trust story —
+* Cross-language verifiability is core to the Verdifax trust story , 
   buyers should be able to recompute manifest-bound hashes in their own
   language without trusting the orchestrator binary.
 * The Go-side test vectors and drift-protection tests already lock the
@@ -91,7 +91,7 @@ def _validate_hex64(value: str, name: str) -> None:
             raise ValueError(f"section0: {name} must be lowercase hex (0-9a-f); " f"found {ch!r}")
 
 
-# ── DSE — Deterministic State Engine dispatch hash ──────────────────────
+# ── DSE, Deterministic State Engine dispatch hash ──────────────────────
 
 DSE_FORMULA_VERSION: Final[str] = "dse.tcu.dispatch.v1"
 """Verbatim mirror of ``internal/dse/dse.go`` ``FormulaVersion``."""
@@ -111,7 +111,7 @@ def dse_dispatch_hash(
         FormulaVersion + "." + envelope_id + "." +
         sequence_id   + "." + program_id  + "." + registry_record_hash
 
-    Note the separator is ``.`` (period), not ``|`` (pipe) — the DSE
+    Note the separator is ``.`` (period), not ``|`` (pipe), the DSE
     kernel uses period-delimited canonical bytes by historical
     convention; later kernels (DCAE, CRES) standardized on ``|``.
 
@@ -139,7 +139,7 @@ def dse_dispatch_hash(
     return _sha256_hex(preimage.encode("utf-8"))
 
 
-# ── DCAE — Deterministic Closure-and-Audit Engine ──────────────────────
+# ── DCAE, Deterministic Closure-and-Audit Engine ──────────────────────
 
 DCAE_PREIMAGE_VERSION: Final[str] = "verdifax.dcae.v1"
 """Verbatim mirror of ``internal/dcae/dcae.go`` ``PreimageVersion``."""
@@ -193,7 +193,7 @@ def dcae_closure_hash(
     return _sha256_hex(preimage.encode("utf-8"))
 
 
-# ── CRES — Cryptographic Record Erasure System receipt ─────────────────
+# ── CRES, Cryptographic Record Erasure System receipt ─────────────────
 
 CRES_PREIMAGE_VERSION: Final[str] = "verdifax.cres.v1"
 """Verbatim mirror of ``internal/cres/cres.go`` ``PreimageVersion``."""
@@ -224,7 +224,7 @@ def cres_receipt_hash(
     The receipt is sealed at deletion time and bound to the original
     run via ``envelope_id``. After the DEK is shredded, the receipt's
     hash is the only cryptographic anchor proving the deletion
-    happened — recomputing it from the receipt fields gives an auditor
+    happened, recomputing it from the receipt fields gives an auditor
     independent verification of the chain of custody.
 
     Args:

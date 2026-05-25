@@ -1,4 +1,4 @@
-"""§0 cross-language test vector verification — Python side.
+"""§0 cross-language test vector verification, Python side.
 
 Locks the Python implementation in ``verdifax.section0`` against the
 authoritative Go-side test vectors at
@@ -7,7 +7,7 @@ authoritative Go-side test vectors at
 If a Go-side formula change isn't mirrored here, this test fails with
 the computed hash so the maintainer can either accept the drift (by
 bumping the Preimage Version on both sides) or fix the Python formula
-to match Go. Either way, byte-equality is enforced — the
+to match Go. Either way, byte-equality is enforced, the
 cross-language verifiability claim depends on these tests passing in
 both Go and Python CI on the same fixtures.
 
@@ -141,7 +141,7 @@ def test_all_outputs_are_64_char_lowercase_hex() -> None:
 def test_preimage_versions_match_go_constants() -> None:
     """Preimage version strings must mirror the Go authoritative names.
 
-    Drift here would silently produce mismatching hashes — the strings
+    Drift here would silently produce mismatching hashes, the strings
     are part of every preimage, so an off-by-one in the version slug
     produces a different, undetectable hash.
     """
@@ -284,7 +284,7 @@ def test_cres_hash_file_round_trips_via_canonical_bytes() -> None:
         pytest.skip(f"hash file not present: {hash_file}")
     body = hash_file.read_text(encoding="utf-8")
     # The file documents the formula + locks an expected hash. Search
-    # for the 64-hex token that matches our computed value — robust
+    # for the 64-hex token that matches our computed value, robust
     # against the file's surrounding markdown / commentary changing.
     matches = re.findall(r"\b[0-9a-f]{64}\b", body)
     got = cres_receipt_hash(

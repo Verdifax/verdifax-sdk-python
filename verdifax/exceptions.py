@@ -18,7 +18,7 @@ class VerdifaxError(Exception):
 class ValidationError(VerdifaxError):
     """Raised when a request payload fails client-side validation.
 
-    This is raised before any HTTP call is made — for example when a
+    This is raised before any HTTP call is made, for example when a
     ``program_id`` is not a 64-character lowercase hex string.
     """
 
