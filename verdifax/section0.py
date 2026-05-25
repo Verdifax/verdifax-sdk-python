@@ -14,7 +14,7 @@ same hash from the same input.
 
 Why this exists in the Python SDK:
 
-* Cross-language verifiability is core to the Verdifax trust story , 
+* Cross-language verifiability is core to the Verdifax trust story ,
   buyers should be able to recompute manifest-bound hashes in their own
   language without trusting the orchestrator binary.
 * The Go-side test vectors and drift-protection tests already lock the

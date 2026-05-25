@@ -243,7 +243,7 @@ class AttestationReceipt(_AliasedModel):
 class AttestedContext(_AliasedModel):
     """Caller-supplied "what was happening when this run was triggered".
 
-    Verdifax does not call an AI or evaluate a business policy itself , 
+    Verdifax does not call an AI or evaluate a business policy itself ,
     it produces a sealed manifest of what the *caller* did. The
     ``attested_context`` block is recorded verbatim into the EPA audit
     artifact for the run, becoming a permanent part of the audit
