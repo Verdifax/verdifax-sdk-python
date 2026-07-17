@@ -72,6 +72,7 @@ def attest(
     registry_record_hash: str,
     *,
     attested_context: _Optional[AttestedContext] = None,
+    ai_output_text: _Optional[str] = None,
     base_url: _Optional[str] = None,
     api_key: _Optional[str] = None,
     timeout: _Optional[float] = None,
@@ -84,7 +85,8 @@ def attest(
 
     Pass ``attested_context`` to record a caller-attested actor / model /
     decision block into the run's EPA artifact, see
-    :class:`AttestedContext`.
+    :class:`AttestedContext`. Pass ``ai_output_text`` to route the run
+    through AIVP-T4 governance (the live Claude adapter in production).
     """
     with from_env(base_url=base_url, api_key=api_key, timeout=timeout) as client:
         return client.attest(
@@ -93,6 +95,7 @@ def attest(
             route_id=route_id,
             registry_record_hash=registry_record_hash,
             attested_context=attested_context,
+            ai_output_text=ai_output_text,
         )
 
 

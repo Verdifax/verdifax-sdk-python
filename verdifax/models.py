@@ -358,6 +358,17 @@ class ExecuteRequest(_AliasedModel):
         default=None,
         description="Caller-declared runtime fingerprint (optional).",
     )
+    # AI output text, when supplied the orchestrator routes the run
+    # through the AIVP-T4 governance stage against the configured
+    # adapter (the live Claude adapter in production). The sealed
+    # manifest then carries the adapter ID and the AI-output hash,
+    # and the audit PDF's maturity table classifies the AIVP stage
+    # accordingly. Omitted = the run is attested without AI-output
+    # governance (adapter records an empty input).
+    ai_output_text: Optional[str] = Field(
+        default=None,
+        description="AI output text for AIVP-T4 governance (optional).",
+    )
 
     def model_dump_request(self) -> dict[str, Any]:
         """Serialize to the JSON shape the API expects (snake_case, no nulls)."""

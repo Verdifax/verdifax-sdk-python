@@ -113,11 +113,13 @@ class AsyncVerdifaxClient:
         route_id: str,
         registry_record_hash: str,
         attested_context: Optional[AttestedContext] = None,
+        ai_output_text: Optional[str] = None,
     ) -> AttestationReceipt:
         """Async version of :meth:`VerdifaxClient.attest`.
 
         Accepts the same optional ``attested_context`` block ,
-        see :class:`verdifax.models.AttestedContext`.
+        see :class:`verdifax.models.AttestedContext`, and the same
+        optional ``ai_output_text`` for AIVP-T4 governance.
         """
         request_body = self._build_execute_body(
             payload=payload,
@@ -125,6 +127,7 @@ class AsyncVerdifaxClient:
             route_id=route_id,
             registry_record_hash=registry_record_hash,
             attested_context=attested_context,
+            ai_output_text=ai_output_text,
         )
         try:
             response = await self._http.post("/execute", json=request_body)
@@ -185,6 +188,7 @@ class AsyncVerdifaxClient:
         route_id: str,
         registry_record_hash: str,
         attested_context: Optional[AttestedContext] = None,
+        ai_output_text: Optional[str] = None,
     ) -> dict[str, Any]:
         validate_hex64(program_id, "program_id")
         validate_hex64(registry_record_hash, "registry_record_hash")
@@ -201,6 +205,7 @@ class AsyncVerdifaxClient:
             route_id=route_id,
             registry_record_hash=registry_record_hash,
             attested_context=attested_context,
+            ai_output_text=ai_output_text or None,
         )
         return request.model_dump_request()
 

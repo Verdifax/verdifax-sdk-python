@@ -73,6 +73,32 @@ def test_attest_sends_payload_text_and_validated_fields():
     assert body["registry_record_hash"] == REGISTRY_RECORD_HASH
 
 
+def test_attest_sends_ai_output_text_when_supplied():
+    captured: dict = {}
+    client = _client_with(_success_handler(captured))
+    client.attest(
+        payload="hello",
+        program_id=PROGRAM_ID,
+        route_id=ROUTE_ID,
+        registry_record_hash=REGISTRY_RECORD_HASH,
+        ai_output_text="Loan denied: DTI 52% exceeds 43% policy threshold.",
+    )
+    body = captured["body"]
+    assert body["ai_output_text"] == ("Loan denied: DTI 52% exceeds 43% policy threshold.")
+
+
+def test_attest_omits_ai_output_text_by_default():
+    captured: dict = {}
+    client = _client_with(_success_handler(captured))
+    client.attest(
+        payload="hello",
+        program_id=PROGRAM_ID,
+        route_id=ROUTE_ID,
+        registry_record_hash=REGISTRY_RECORD_HASH,
+    )
+    assert "ai_output_text" not in captured["body"]
+
+
 def test_attest_with_bytes_payload_decodes_when_utf8():
     captured: dict = {}
     client = _client_with(_success_handler(captured))

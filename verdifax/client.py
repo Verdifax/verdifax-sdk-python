@@ -110,6 +110,7 @@ class VerdifaxClient:
         registry_record_hash: str,
         attested_context: Optional[AttestedContext] = None,
         reproducibility_context: Optional[Any] = None,
+        ai_output_text: Optional[str] = None,
     ) -> AttestationReceipt:
         """Run the nine-stage pipeline against ``payload`` and return a receipt.
 
@@ -133,6 +134,13 @@ class VerdifaxClient:
                 section. Build via
                 :func:`verdifax.research.capture_environment` for
                 auto-detection.
+            ai_output_text: Optional AI output text to govern via the
+                AIVP-T4 stage. When supplied, the orchestrator routes
+                the run through the configured AIVP adapter (the live
+                Claude adapter in production) and seals the adapter ID
+                plus the AI-output hash into the manifest. When
+                omitted, the run is attested without AI-output
+                governance.
 
         Returns:
             An :class:`AttestationReceipt` containing the sealed manifest.
@@ -150,6 +158,7 @@ class VerdifaxClient:
             registry_record_hash=registry_record_hash,
             attested_context=attested_context,
             reproducibility_context=reproducibility_context,
+            ai_output_text=ai_output_text,
         )
         try:
             response = self._http.post("/execute", json=request_body)
@@ -222,6 +231,7 @@ class VerdifaxClient:
         registry_record_hash: str,
         attested_context: Optional[AttestedContext] = None,
         reproducibility_context: Optional[Any] = None,
+        ai_output_text: Optional[str] = None,
     ) -> dict[str, Any]:
         validate_hex64(program_id, "program_id")
         validate_hex64(registry_record_hash, "registry_record_hash")
@@ -262,6 +272,7 @@ class VerdifaxClient:
             registry_record_hash=registry_record_hash,
             attested_context=attested_context,
             reproducibility_context=repro_dict,
+            ai_output_text=ai_output_text or None,
         )
         return request.model_dump_request()
 
