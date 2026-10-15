@@ -46,6 +46,18 @@ def _format_payload(provider: str, prompt: str, response: Union[str, bytes]) -> 
     )
 
 
+def _governed_text(response: Union[str, bytes]) -> str:
+    """Decode the response for AIVP-T4 governance.
+
+    Governance reviews TEXT: a bytes response is decoded as UTF-8 and
+    refused if it is not text, because silently governing a lossy
+    decode would seal a review of something other than the output.
+    """
+    if isinstance(response, bytes):
+        return response.decode("utf-8")
+    return response
+
+
 def attest_claude_response(
     prompt: str,
     response: Union[str, bytes],
@@ -53,6 +65,7 @@ def attest_claude_response(
     route_id: str,
     registry_record_hash: str,
     *,
+    govern: bool = False,
     client: Optional[VerdifaxClient] = None,
 ) -> AttestationReceipt:
     """Attest an Anthropic Claude prompt/response pair.
@@ -61,6 +74,15 @@ def attest_claude_response(
     runs the standard Verdifax pipeline against it. Pass an explicit
     ``client`` to reuse an existing connection pool; otherwise a temporary
     client is created from environment variables.
+
+    ``govern=True`` additionally routes the response text through the
+    orchestrator's AIVP-T4 review stage, where an independent reviewer
+    model can block or halt it before the run seals; the review outcome
+    and the governed-output hash become part of the sealed record. Off
+    by default because governance changes the manifest hash for the
+    same prompt/response pair, which would silently break existing
+    integrations' hash expectations; new integrations should turn it
+    on, and the docs' canonical example does.
     """
     payload = _format_payload("claude", prompt, response)
     own_client = client is None
@@ -72,6 +94,7 @@ def attest_claude_response(
             program_id=program_id,
             route_id=route_id,
             registry_record_hash=registry_record_hash,
+            ai_output_text=_governed_text(response) if govern else None,
         )
     finally:
         if own_client:
@@ -85,6 +108,7 @@ def attest_openai_response(
     route_id: str,
     registry_record_hash: str,
     *,
+    govern: bool = False,
     client: Optional[VerdifaxClient] = None,
 ) -> AttestationReceipt:
     """Attest an OpenAI prompt/response pair.
@@ -103,6 +127,7 @@ def attest_openai_response(
             program_id=program_id,
             route_id=route_id,
             registry_record_hash=registry_record_hash,
+            ai_output_text=_governed_text(response) if govern else None,
         )
     finally:
         if own_client:
