@@ -48,7 +48,8 @@ class AsyncVerdifaxClient:
 
     Args:
         base_url: Base URL of the Verdifax API. Falls back to
-            ``$VERDIFAX_API_URL`` and finally to ``http://localhost:9090``.
+            ``$VERDIFAX_API_URL`` and finally to the production API at
+            ``https://api.verdifax.com``.
         api_key: Optional API key sent as the ``X-Verdifax-Key`` header.
             Falls back to ``$VERDIFAX_API_KEY``.
         timeout: Request timeout in seconds. Defaults to 30.

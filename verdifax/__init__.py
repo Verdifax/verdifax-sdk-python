@@ -13,7 +13,8 @@ Three-line integration:
     '7f...'
 
 The SDK targets the Verdifax orchestrator REST API. By default it talks
-to ``http://localhost:9090``; override with ``$VERDIFAX_API_URL`` or by
+to the production API at ``https://api.verdifax.com``; override with
+``$VERDIFAX_API_URL`` or by
 passing ``base_url`` to :class:`VerdifaxClient`.
 """
 

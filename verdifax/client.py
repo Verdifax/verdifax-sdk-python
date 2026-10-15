@@ -2,7 +2,7 @@
 
 Example:
     >>> from verdifax import VerdifaxClient
-    >>> client = VerdifaxClient(base_url="http://localhost:9090")
+    >>> client = VerdifaxClient()  # production; pass base_url for a local orchestrator
     >>> receipt = client.attest(
     ...     payload="hello verdifax",
     ...     program_id="a" * 64,
@@ -32,7 +32,12 @@ from .models import (
     ExecutionManifest,
 )
 
-DEFAULT_BASE_URL = "http://localhost:9090"
+# The default points at production (2026-10-15, v0.5.1): an SDK whose
+# three-line quickstart silently talked to localhost produced a
+# connection-refused for every new user who followed the docs, and a
+# silent wrong default is worse than an explicit one. Local
+# development opts in via $VERDIFAX_API_URL or the base_url argument.
+DEFAULT_BASE_URL = "https://api.verdifax.com"
 DEFAULT_TIMEOUT = 30.0
 ENV_BASE_URL = "VERDIFAX_API_URL"
 ENV_API_KEY = "VERDIFAX_API_KEY"
@@ -43,7 +48,8 @@ class VerdifaxClient:
 
     Args:
         base_url: Base URL of the Verdifax API. Falls back to
-            ``$VERDIFAX_API_URL`` and finally to ``http://localhost:9090``.
+            ``$VERDIFAX_API_URL`` and finally to the production API at
+            ``https://api.verdifax.com``.
         api_key: Optional API key sent as the ``X-Verdifax-Key`` header.
             Falls back to ``$VERDIFAX_API_KEY``.
         timeout: Request timeout in seconds. Defaults to 30.
