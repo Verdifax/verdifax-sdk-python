@@ -20,15 +20,16 @@ passing ``base_url`` to :class:`VerdifaxClient`.
 
 from __future__ import annotations
 
-from typing import Optional as _Optional, Union as _Union
+from typing import NoReturn as _NoReturn, Optional as _Optional, Union as _Union
 
 from ._version import __version__
 from .async_client import AsyncVerdifaxClient
-from .client import VerdifaxClient
+from .client import VERIFY_UNSUPPORTED_MESSAGE, VerdifaxClient
 from .exceptions import (
     APIError,
     ConnectionError,
     StageError,
+    UnsupportedOperationError,
     ValidationError,
     VerdifaxError,
 )
@@ -38,9 +39,11 @@ from .models import (
     STAGE_NAMES,
     AttestationReceipt,
     AttestedContext,
+    DCAEEngineHint,
     ExecuteRequest,
     ExecutionManifest,
     StageResult,
+    VerifyResponse,
 )
 from . import research  # reproducible-research toolkit (Option B Phase 3)
 from . import section0  # §0 cross-language canonical hash verifier
@@ -100,6 +103,25 @@ def attest(
         )
 
 
+def verify_run(
+    run_id: int,
+    *,
+    base_url: _Optional[str] = None,
+    api_key: _Optional[str] = None,
+    timeout: _Optional[float] = None,
+) -> VerifyResponse:
+    """Module-level shortcut for :meth:`VerdifaxClient.verify_run`.
+
+    Calls ``GET /runs/{run_id}/verify`` with a one-shot client. The
+    server re-derives the manifest hash from the run's stored manifest
+    fields and compares it with the recorded seal. For an independent
+    offline check of the sealed audit bundle, use the open-source
+    ``verdifax-verify`` CLI.
+    """
+    with from_env(base_url=base_url, api_key=api_key, timeout=timeout) as client:
+        return client.verify_run(run_id)
+
+
 def verify(
     manifest_hash: str,
     payload: _Union[str, bytes],
@@ -111,21 +133,16 @@ def verify(
     base_url: _Optional[str] = None,
     api_key: _Optional[str] = None,
     timeout: _Optional[float] = None,
-) -> bool:
-    """Module-level shortcut: verify a previously issued manifest hash.
+) -> _NoReturn:
+    """Unsupported since 0.6.0; always raises :class:`UnsupportedOperationError`.
 
-    ``attested_context`` must match the value used on the original
-    ``attest`` call.
+    It re-ran the pipeline and compared manifest hashes, which cannot
+    match because every run seals its own admission clock, nonce, and
+    public-log entry. Use :func:`verify_run` instead, or
+    :func:`verdifax.research.verify_determinism` to check that the
+    pipeline replays deterministically.
     """
-    with from_env(base_url=base_url, api_key=api_key, timeout=timeout) as client:
-        return client.verify(
-            manifest_hash=manifest_hash,
-            payload=payload,
-            program_id=program_id,
-            route_id=route_id,
-            registry_record_hash=registry_record_hash,
-            attested_context=attested_context,
-        )
+    raise UnsupportedOperationError(VERIFY_UNSUPPORTED_MESSAGE)
 
 
 __all__ = [
@@ -134,15 +151,18 @@ __all__ = [
     "AttestationReceipt",
     "AttestedContext",
     "ConnectionError",
+    "DCAEEngineHint",
     "ExecuteRequest",
     "ExecutionManifest",
     "KERNEL_NAMES",
     "STAGE_NAMES",
     "StageError",
     "StageResult",
+    "UnsupportedOperationError",
     "ValidationError",
     "VerdifaxClient",
     "VerdifaxError",
+    "VerifyResponse",
     "__version__",
     "attest",
     "attest_claude_response",
@@ -150,4 +170,5 @@ __all__ = [
     "from_env",
     "research",
     "verify",
+    "verify_run",
 ]

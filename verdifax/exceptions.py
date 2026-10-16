@@ -31,6 +31,15 @@ class ConnectionError(VerdifaxError):
     """
 
 
+class UnsupportedOperationError(VerdifaxError):
+    """Raised when a caller invokes an SDK method that can no longer give a true answer.
+
+    ``verify()`` raises this as of 0.6.0: it re-ran the pipeline and
+    compared manifest hashes, a comparison that cannot succeed against
+    the production orchestrator. The message names the replacement.
+    """
+
+
 class APIError(VerdifaxError):
     """Raised when the Verdifax API returns a non-success HTTP response.
 
@@ -82,6 +91,7 @@ __all__ = [
     "APIError",
     "ConnectionError",
     "StageError",
+    "UnsupportedOperationError",
     "ValidationError",
     "VerdifaxError",
 ]

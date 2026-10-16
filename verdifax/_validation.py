@@ -35,6 +35,18 @@ def validate_route_id(value: str) -> None:
         raise ValidationError("route_id must be a non-empty string")
 
 
+def validate_run_id(value: int) -> None:
+    """Raise ``ValidationError`` unless ``value`` is a positive integer run ID.
+
+    ``bool`` is rejected even though it subclasses ``int``, so a stray
+    ``True`` is not silently sent as run 1.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError(f"run_id must be an int, got {type(value).__name__}")
+    if value <= 0:
+        raise ValidationError(f"run_id must be > 0, got {value}")
+
+
 def normalize_payload(payload: Union[str, bytes]) -> tuple[str, str]:
     """Return ``(payload_text, payload_b64)`` exactly one of which is non-empty.
 
@@ -54,4 +66,4 @@ def normalize_payload(payload: Union[str, bytes]) -> tuple[str, str]:
     raise ValidationError(f"payload must be str or bytes, got {type(payload).__name__}")
 
 
-__all__ = ["normalize_payload", "validate_hex64", "validate_route_id"]
+__all__ = ["normalize_payload", "validate_hex64", "validate_route_id", "validate_run_id"]

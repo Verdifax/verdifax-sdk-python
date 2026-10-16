@@ -7,14 +7,17 @@ import json
 import httpx
 import pytest
 
-from verdifax import AsyncVerdifaxClient, AttestedContext
+from verdifax import AsyncVerdifaxClient, AttestedContext, VerifyResponse
+from verdifax.client import VERIFY_UNSUPPORTED_MESSAGE
 from verdifax.exceptions import (
     APIError,
     ConnectionError as VerdifaxConnectionError,
     StageError,
+    UnsupportedOperationError,
     ValidationError,
 )
 from tests.conftest import (
+    MANIFEST_HASH,
     PROGRAM_ID,
     REGISTRY_RECORD_HASH,
     ROUTE_ID,
@@ -33,6 +36,15 @@ def _success_handler(captured: dict | None = None):
             captured["request"] = request
             captured["body"] = json.loads(request.content) if request.content else None
         return httpx.Response(200, json=make_execute_response())
+
+    return handler
+
+
+def _json_handler(body: dict, captured: dict | None = None, status: int = 200):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if captured is not None:
+            captured["request"] = request
+        return httpx.Response(status, json=body)
 
     return handler
 
@@ -105,19 +117,6 @@ async def test_async_attest_validates_program_id():
             )
 
 
-@pytest.mark.asyncio
-async def test_async_verify_validates_manifest_hash():
-    async with _async_client_with(_success_handler()) as client:
-        with pytest.raises(ValidationError):
-            await client.verify(
-                manifest_hash="bad",
-                payload="hi",
-                program_id=PROGRAM_ID,
-                route_id=ROUTE_ID,
-                registry_record_hash=REGISTRY_RECORD_HASH,
-            )
-
-
 # ── error paths ────────────────────────────────────────────────────────────────
 
 
@@ -171,33 +170,81 @@ async def test_async_transport_error_translated_to_connection_error():
             )
 
 
-# ── verify ─────────────────────────────────────────────────────────────────────
+# ── verify_run ─────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_async_verify_returns_true_when_hashes_match():
-    async with _async_client_with(_success_handler()) as client:
-        ok = await client.verify(
-            manifest_hash="9" * 64,
-            payload="hi",
-            program_id=PROGRAM_ID,
-            route_id=ROUTE_ID,
-            registry_record_hash=REGISTRY_RECORD_HASH,
-        )
-    assert ok is True
+async def test_async_verify_run_returns_verified_true(verify_ok_response):
+    captured: dict = {}
+    async with _async_client_with(_json_handler(verify_ok_response, captured)) as client:
+        result = await client.verify_run(42)
+    assert captured["request"].method == "GET"
+    assert captured["request"].url.path == "/runs/42/verify"
+    assert isinstance(result, VerifyResponse)
+    assert result.ok is True
+    assert result.verified is True
+    assert result.manifest_hash == result.recomputed_hash == MANIFEST_HASH
+    assert result.verification_kind == "manifest-self-seal"
+    assert result.dcae_engine_hint is not None
+    assert result.dcae_engine_hint.engine_version == "dcae-v1"
+    assert result.reason is None
 
 
 @pytest.mark.asyncio
-async def test_async_verify_returns_false_when_hashes_differ():
+async def test_async_verify_run_returns_verified_false(verify_mismatch_response):
+    async with _async_client_with(_json_handler(verify_mismatch_response)) as client:
+        result = await client.verify_run(42)
+    assert result.ok is True
+    assert result.verified is False
+    assert result.manifest_hash != result.recomputed_hash
+
+
+@pytest.mark.asyncio
+async def test_async_verify_run_stage_error_variant(verify_stage_error_response):
+    async with _async_client_with(_json_handler(verify_stage_error_response)) as client:
+        result = await client.verify_run(7)
+    assert result.ok is True
+    assert result.verified is False
+    assert result.reason == "original run is a stage_error; no manifest to verify"
+    assert result.recomputed_hash is None
+    assert result.dcae_engine_hint is None
+
+
+@pytest.mark.asyncio
+async def test_async_verify_run_404_raises_api_error():
+    handler = _json_handler({"ok": False, "error": "run not found"}, status=404)
+    async with _async_client_with(handler) as client:
+        with pytest.raises(APIError) as exc_info:
+            await client.verify_run(999)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_async_verify_run_validates_run_id():
     async with _async_client_with(_success_handler()) as client:
-        ok = await client.verify(
-            manifest_hash="0" * 64,
-            payload="hi",
-            program_id=PROGRAM_ID,
-            route_id=ROUTE_ID,
-            registry_record_hash=REGISTRY_RECORD_HASH,
-        )
-    assert ok is False
+        with pytest.raises(ValidationError):
+            await client.verify_run(0)
+
+
+# ── verify (unsupported since 0.6.0) ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_async_verify_raises_with_explanation():
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("verify() must not call the API")
+
+    async with _async_client_with(handler) as client:
+        with pytest.raises(UnsupportedOperationError) as exc_info:
+            await client.verify(
+                manifest_hash=MANIFEST_HASH,
+                payload="hi",
+                program_id=PROGRAM_ID,
+                route_id=ROUTE_ID,
+                registry_record_hash=REGISTRY_RECORD_HASH,
+            )
+    assert str(exc_info.value) == VERIFY_UNSUPPORTED_MESSAGE
+    assert "verify_run(run_id)" in str(exc_info.value)
 
 
 # ── attested_context (Day 27 / closes pending #19) ────────────────────────────
@@ -234,18 +281,3 @@ async def test_async_attest_omits_attested_context_when_unused():
             registry_record_hash=REGISTRY_RECORD_HASH,
         )
     assert "attested_context" not in captured["body"]
-
-
-@pytest.mark.asyncio
-async def test_async_verify_threads_attested_context_to_attest():
-    captured: dict = {}
-    async with _async_client_with(_success_handler(captured)) as client:
-        await client.verify(
-            manifest_hash="9" * 64,
-            payload="hi",
-            program_id=PROGRAM_ID,
-            route_id=ROUTE_ID,
-            registry_record_hash=REGISTRY_RECORD_HASH,
-            attested_context=AttestedContext(actor_role="admin"),
-        )
-    assert captured["body"]["attested_context"]["actor_role"] == "admin"

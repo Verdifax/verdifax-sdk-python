@@ -65,6 +65,44 @@ def make_execute_response(manifest_hash: str = MANIFEST_HASH) -> dict[str, Any]:
     }
 
 
+def make_verify_ok_response(recomputed_hash: str = MANIFEST_HASH) -> dict[str, Any]:
+    """A GET /runs/{id}/verify body for a completed run, shaped like handleVerifyRun."""
+    return {
+        "ok": True,
+        "verified": recomputed_hash == MANIFEST_HASH,
+        "manifest_hash": MANIFEST_HASH,
+        "recomputed_hash": recomputed_hash,
+        "verification_at": "2026-10-15T20:00:00.123456789Z",
+        "verification_kind": "manifest-self-seal",
+        "formula_version": "v1.7 (Phase 17, CRES)",
+        "dcae_engine_hint": {
+            "available_at": "POST /dcae/verify",
+            "engine_version": "dcae-v1",
+        },
+    }
+
+
+@pytest.fixture
+def verify_ok_response() -> dict[str, Any]:
+    return make_verify_ok_response()
+
+
+@pytest.fixture
+def verify_mismatch_response() -> dict[str, Any]:
+    return make_verify_ok_response(recomputed_hash="0" * 64)
+
+
+@pytest.fixture
+def verify_stage_error_response() -> dict[str, Any]:
+    """The stage_error variant: the run has no stored manifest to recompute."""
+    return {
+        "ok": True,
+        "verified": False,
+        "reason": "original run is a stage_error; no manifest to verify",
+        "manifest_hash": "",
+    }
+
+
 @pytest.fixture
 def manifest_dict() -> dict[str, Any]:
     return make_manifest_dict()

@@ -240,6 +240,58 @@ class AttestationReceipt(_AliasedModel):
         )
 
 
+class DCAEEngineHint(_AliasedModel):
+    """Pointer to the orchestrator's DCAE verification endpoint and engine version.
+
+    Returned inside :class:`VerifyResponse` so a caller that wants to
+    go on to DCAE proof-bundle verification knows where to send it.
+    """
+
+    available_at: str = ""
+    engine_version: str = ""
+
+
+class VerifyResponse(_AliasedModel):
+    """Response body of ``GET /runs/{id}/verify``.
+
+    Mirrors ``VerifyResponse`` in the Go and Node SDKs. For a run that
+    completed, the orchestrator loads the run's stored manifest,
+    re-derives the manifest hash from those stored fields with the
+    formula version the run was sealed under, and compares it with the
+    recorded seal. ``verified`` is ``True`` exactly when
+    ``recomputed_hash == manifest_hash``.
+
+    For a run that was recorded as a stage error there is no stored
+    manifest to recompute. The server then returns ``ok=True``,
+    ``verified=False``, the recorded ``manifest_hash`` (which may be
+    empty), and a ``reason`` string; ``recomputed_hash``,
+    ``verification_at``, ``verification_kind``, ``formula_version`` and
+    ``dcae_engine_hint`` are absent and read as ``None`` here.
+    """
+
+    ok: bool
+    verified: bool
+    manifest_hash: str = ""
+    recomputed_hash: Optional[str] = None
+    verification_at: Optional[str] = Field(
+        default=None,
+        description="Server time of the check, RFC 3339 with nanoseconds (UTC).",
+    )
+    verification_kind: Optional[str] = Field(
+        default=None,
+        description='What was checked; "manifest-self-seal" for a completed run.',
+    )
+    formula_version: Optional[str] = Field(
+        default=None,
+        description="Manifest-hash formula the stored manifest was recomputed under.",
+    )
+    dcae_engine_hint: Optional[DCAEEngineHint] = None
+    reason: Optional[str] = Field(
+        default=None,
+        description="Set when the run has no manifest to verify (stage_error runs).",
+    )
+
+
 class AttestedContext(_AliasedModel):
     """Caller-supplied "what was happening when this run was triggered".
 
@@ -379,9 +431,11 @@ class ExecuteRequest(_AliasedModel):
 __all__ = [
     "AttestationReceipt",
     "AttestedContext",
+    "DCAEEngineHint",
     "ExecuteRequest",
     "ExecutionManifest",
     "KERNEL_NAMES",
     "STAGE_NAMES",
     "StageResult",
+    "VerifyResponse",
 ]

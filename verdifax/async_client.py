@@ -21,25 +21,32 @@ from __future__ import annotations
 
 import os
 from types import TracebackType
-from typing import Any, Optional, Type, Union
+from typing import Any, NoReturn, Optional, Type, Union
 
 import httpx
 
 from ._transport import parse_response, wrap_transport_error
-from ._validation import normalize_payload, validate_hex64, validate_route_id
+from ._validation import (
+    normalize_payload,
+    validate_hex64,
+    validate_route_id,
+    validate_run_id,
+)
 from ._version import __version__
 from .client import (
     DEFAULT_BASE_URL,
     DEFAULT_TIMEOUT,
     ENV_API_KEY,
     ENV_BASE_URL,
+    VERIFY_UNSUPPORTED_MESSAGE,
 )
-from .exceptions import APIError
+from .exceptions import APIError, UnsupportedOperationError
 from .models import (
     AttestationReceipt,
     AttestedContext,
     ExecuteRequest,
     ExecutionManifest,
+    VerifyResponse,
 )
 
 
@@ -143,6 +150,21 @@ class AsyncVerdifaxClient:
             )
         return AttestationReceipt.from_api_response(body)
 
+    async def verify_run(self, run_id: int) -> VerifyResponse:
+        """Async version of :meth:`VerdifaxClient.verify_run`.
+
+        Calls ``GET /runs/{run_id}/verify``. The server re-derives the
+        manifest hash from the run's stored manifest fields and compares it
+        with the recorded seal. For an independent offline check of the
+        sealed audit bundle, use the open-source ``verdifax-verify`` CLI.
+        """
+        validate_run_id(run_id)
+        try:
+            response = await self._http.get(f"/runs/{run_id}/verify")
+        except httpx.HTTPError as exc:
+            raise wrap_transport_error(exc) from exc
+        return VerifyResponse.model_validate(parse_response(response))
+
     async def verify(
         self,
         manifest_hash: str,
@@ -151,17 +173,12 @@ class AsyncVerdifaxClient:
         route_id: str,
         registry_record_hash: str,
         attested_context: Optional[AttestedContext] = None,
-    ) -> bool:
-        """Async version of :meth:`VerdifaxClient.verify`."""
-        validate_hex64(manifest_hash, "manifest_hash")
-        receipt = await self.attest(
-            payload=payload,
-            program_id=program_id,
-            route_id=route_id,
-            registry_record_hash=registry_record_hash,
-            attested_context=attested_context,
-        )
-        return receipt.manifest_hash == manifest_hash
+    ) -> NoReturn:
+        """Unsupported since 0.6.0; always raises :class:`UnsupportedOperationError`.
+
+        See :meth:`VerdifaxClient.verify`. Use :meth:`verify_run` instead.
+        """
+        raise UnsupportedOperationError(VERIFY_UNSUPPORTED_MESSAGE)
 
     async def execute(
         self,

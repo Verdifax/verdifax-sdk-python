@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from verdifax import VerdifaxClient
+from verdifax.research import verify_determinism
 
 INTEGRATION_BASE_URL = os.environ.get("VERDIFAX_INTEGRATION_URL", "http://localhost:9090")
 INTEGRATION_ENABLED = os.environ.get("VERDIFAX_INTEGRATION") == "1"
@@ -58,26 +59,31 @@ def test_attest_against_live_api_returns_64_char_manifest_hash():
     assert receipt.manifest.independent_verified is True
 
 
-def test_two_runs_with_identical_inputs_produce_identical_manifest_hashes():
+def test_verify_determinism_against_live_api():
+    # Two plain /execute calls never share a manifest hash: each run seals
+    # its own admission clock, nonce, and public-log entry. The
+    # determinism endpoint pins those for both replays, so equality there
+    # is the meaningful check.
     client = VerdifaxClient(base_url=INTEGRATION_BASE_URL)
-    inputs = dict(
+    result = verify_determinism(
+        client,
         payload="determinism check",
         program_id=PROGRAM_ID,
         route_id=ROUTE_ID,
         registry_record_hash=REGISTRY_RECORD_HASH,
     )
-    receipt_a = client.attest(**inputs)
-    receipt_b = client.attest(**inputs)
-    assert receipt_a.manifest_hash == receipt_b.manifest_hash
+    assert result.deterministic is True
 
 
-def test_verify_against_live_api():
+def test_verify_run_against_live_api():
     client = VerdifaxClient(base_url=INTEGRATION_BASE_URL)
-    inputs = dict(
+    receipt = client.attest(
         payload="verify check",
         program_id=PROGRAM_ID,
         route_id=ROUTE_ID,
         registry_record_hash=REGISTRY_RECORD_HASH,
     )
-    receipt = client.attest(**inputs)
-    assert client.verify(manifest_hash=receipt.manifest_hash, **inputs) is True
+    assert receipt.run_id is not None
+    result = client.verify_run(receipt.run_id)
+    assert result.verified is True
+    assert result.manifest_hash == receipt.manifest_hash

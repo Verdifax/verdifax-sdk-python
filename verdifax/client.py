@@ -17,19 +17,25 @@ from __future__ import annotations
 
 import os
 from types import TracebackType
-from typing import Any, Optional, Type, Union
+from typing import Any, NoReturn, Optional, Type, Union
 
 import httpx
 
 from ._transport import parse_response, wrap_transport_error
-from ._validation import normalize_payload, validate_hex64, validate_route_id
+from ._validation import (
+    normalize_payload,
+    validate_hex64,
+    validate_route_id,
+    validate_run_id,
+)
 from ._version import __version__
-from .exceptions import APIError
+from .exceptions import APIError, UnsupportedOperationError
 from .models import (
     AttestationReceipt,
     AttestedContext,
     ExecuteRequest,
     ExecutionManifest,
+    VerifyResponse,
 )
 
 # The default points at production (2026-10-15, v0.5.1): an SDK whose
@@ -41,6 +47,17 @@ DEFAULT_BASE_URL = "https://api.verdifax.com"
 DEFAULT_TIMEOUT = 30.0
 ENV_BASE_URL = "VERDIFAX_API_URL"
 ENV_API_KEY = "VERDIFAX_API_KEY"
+
+# Raised by every verify() variant (sync, async, module-level) as of 0.6.0.
+VERIFY_UNSUPPORTED_MESSAGE = (
+    "verify() is no longer supported (verdifax 0.6.0). It re-ran the pipeline "
+    "and compared manifest hashes, which cannot match: every run seals its own "
+    "admission clock, nonce, and public-log entry into its manifest hash. Use "
+    "verify_run(run_id) to have the server re-derive a recorded run's manifest "
+    "hash and compare it with the recorded seal, or "
+    "verdifax.research.verify_determinism() to check that the pipeline replays "
+    "deterministically."
+)
 
 
 class VerdifaxClient:
@@ -179,6 +196,50 @@ class VerdifaxClient:
             )
         return AttestationReceipt.from_api_response(body)
 
+    def verify_run(self, run_id: int) -> VerifyResponse:
+        """Ask the server to re-derive a recorded run's manifest hash and check its seal.
+
+        Calls ``GET /runs/{run_id}/verify`` with this client's API key.
+        The orchestrator loads the run's stored manifest fields, recomputes
+        the manifest hash from them under the formula version the run was
+        sealed with, and compares the result with the manifest hash it
+        recorded for that run. ``verified`` is ``True`` exactly when the two
+        are equal.
+
+        What this proves: the stored manifest fields still hash to the
+        recorded seal, as computed by the Verdifax server. It does not
+        re-run the pipeline, it does not see the original payload (only its
+        hash is stored), and it is not independent of Verdifax. For an
+        independent offline check of the sealed audit bundle, use the
+        open-source ``verdifax-verify`` CLI
+        (https://github.com/Verdifax/verdifax-verify).
+
+        A run recorded as a stage error has no stored manifest; the server
+        then returns ``verified=False`` with a ``reason`` and no
+        ``recomputed_hash``.
+
+        Args:
+            run_id: The server-side run ID, available as
+                :attr:`AttestationReceipt.run_id` on the receipt returned by
+                :meth:`attest`.
+
+        Returns:
+            A :class:`VerifyResponse`.
+
+        Raises:
+            ValidationError: If ``run_id`` is not a positive integer.
+            APIError: For a non-2xx response, for example 401 without a
+                valid API key or 404 when the run does not exist or belongs
+                to another key.
+            ConnectionError: If the API was unreachable.
+        """
+        validate_run_id(run_id)
+        try:
+            response = self._http.get(f"/runs/{run_id}/verify")
+        except httpx.HTTPError as exc:
+            raise wrap_transport_error(exc) from exc
+        return VerifyResponse.model_validate(parse_response(response))
+
     def verify(
         self,
         manifest_hash: str,
@@ -187,29 +248,24 @@ class VerdifaxClient:
         route_id: str,
         registry_record_hash: str,
         attested_context: Optional[AttestedContext] = None,
-    ) -> bool:
-        """Re-derive the manifest hash from inputs and compare to ``manifest_hash``.
+    ) -> NoReturn:
+        """Unsupported since 0.6.0; always raises :class:`UnsupportedOperationError`.
 
-        This re-runs the pipeline against the same inputs and checks that
-        the resulting ``manifest_hash`` matches the one provided. Equality
-        means the inputs reproduce the recorded manifest deterministically.
+        This method used to re-run the pipeline on the same inputs and
+        compare the new manifest hash with ``manifest_hash``. Against the
+        production orchestrator that comparison can never succeed, because
+        every run seals its own admission clock, nonce, and public-log
+        entry into its manifest hash. The signature is kept so existing
+        callers get this explanation instead of a ``TypeError``.
 
-        ``attested_context`` must match the value used on the original
-        ``attest`` call, since the EPA artifact (and therefore the
-        manifest hash) depends on it.
+        Use :meth:`verify_run` to have the server re-derive a recorded run's
+        seal, or :func:`verdifax.research.verify_determinism` to check that
+        the pipeline replays deterministically.
 
-        Returns:
-            ``True`` when the recomputed hash matches, ``False`` otherwise.
+        Raises:
+            UnsupportedOperationError: Always.
         """
-        validate_hex64(manifest_hash, "manifest_hash")
-        receipt = self.attest(
-            payload=payload,
-            program_id=program_id,
-            route_id=route_id,
-            registry_record_hash=registry_record_hash,
-            attested_context=attested_context,
-        )
-        return receipt.manifest_hash == manifest_hash
+        raise UnsupportedOperationError(VERIFY_UNSUPPORTED_MESSAGE)
 
     def execute(
         self,
@@ -283,4 +339,9 @@ class VerdifaxClient:
         return request.model_dump_request()
 
 
-__all__ = ["DEFAULT_BASE_URL", "DEFAULT_TIMEOUT", "VerdifaxClient"]
+__all__ = [
+    "DEFAULT_BASE_URL",
+    "DEFAULT_TIMEOUT",
+    "VERIFY_UNSUPPORTED_MESSAGE",
+    "VerdifaxClient",
+]

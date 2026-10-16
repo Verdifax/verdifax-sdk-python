@@ -7,14 +7,18 @@ import json
 import httpx
 import pytest
 
-from verdifax import AttestedContext, VerdifaxClient
+from verdifax import AttestedContext, VerdifaxClient, VerifyResponse
+from verdifax.client import VERIFY_UNSUPPORTED_MESSAGE
 from verdifax.exceptions import (
     APIError,
     ConnectionError as VerdifaxConnectionError,
     StageError,
+    UnsupportedOperationError,
     ValidationError,
+    VerdifaxError,
 )
 from tests.conftest import (
+    MANIFEST_HASH,
     PROGRAM_ID,
     REGISTRY_RECORD_HASH,
     ROUTE_ID,
@@ -36,6 +40,15 @@ def _success_handler(captured: dict | None = None):
             captured["request"] = request
             captured["body"] = json.loads(request.content) if request.content else None
         return httpx.Response(200, json=make_execute_response())
+
+    return handler
+
+
+def _json_handler(body: dict, captured: dict | None = None, status: int = 200):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if captured is not None:
+            captured["request"] = request
+        return httpx.Response(status, json=body)
 
     return handler
 
@@ -272,43 +285,100 @@ def test_transport_error_translated_to_connection_error():
         )
 
 
-# ── verify ─────────────────────────────────────────────────────────────────────
+# ── verify_run ─────────────────────────────────────────────────────────────────
 
 
-def test_verify_returns_true_when_hashes_match():
-    client = _client_with(_success_handler())
-    ok = client.verify(
-        manifest_hash="9" * 64,
-        payload="hi",
-        program_id=PROGRAM_ID,
-        route_id=ROUTE_ID,
-        registry_record_hash=REGISTRY_RECORD_HASH,
-    )
-    assert ok is True
+def test_verify_run_returns_verified_true(verify_ok_response):
+    captured: dict = {}
+    client = _client_with(_json_handler(verify_ok_response, captured))
+    result = client.verify_run(42)
+    assert captured["request"].method == "GET"
+    assert captured["request"].url.path == "/runs/42/verify"
+    assert isinstance(result, VerifyResponse)
+    assert result.ok is True
+    assert result.verified is True
+    assert result.manifest_hash == result.recomputed_hash == MANIFEST_HASH
+    assert result.verification_kind == "manifest-self-seal"
+    assert result.formula_version == "v1.7 (Phase 17, CRES)"
+    assert result.verification_at == "2026-10-15T20:00:00.123456789Z"
+    assert result.dcae_engine_hint is not None
+    assert result.dcae_engine_hint.available_at == "POST /dcae/verify"
+    assert result.dcae_engine_hint.engine_version == "dcae-v1"
+    assert result.reason is None
 
 
-def test_verify_returns_false_when_hashes_differ():
-    client = _client_with(_success_handler())
-    ok = client.verify(
-        manifest_hash="0" * 64,
-        payload="hi",
-        program_id=PROGRAM_ID,
-        route_id=ROUTE_ID,
-        registry_record_hash=REGISTRY_RECORD_HASH,
-    )
-    assert ok is False
+def test_verify_run_returns_verified_false_when_seal_does_not_match(verify_mismatch_response):
+    client = _client_with(_json_handler(verify_mismatch_response))
+    result = client.verify_run(42)
+    assert result.ok is True
+    assert result.verified is False
+    assert result.recomputed_hash == "0" * 64
+    assert result.manifest_hash != result.recomputed_hash
 
 
-def test_verify_validates_manifest_hash_format():
-    client = _client_with(_success_handler())
+def test_verify_run_stage_error_variant(verify_stage_error_response):
+    client = _client_with(_json_handler(verify_stage_error_response))
+    result = client.verify_run(7)
+    assert result.ok is True
+    assert result.verified is False
+    assert result.reason == "original run is a stage_error; no manifest to verify"
+    assert result.manifest_hash == ""
+    assert result.recomputed_hash is None
+    assert result.verification_kind is None
+    assert result.formula_version is None
+    assert result.verification_at is None
+    assert result.dcae_engine_hint is None
+
+
+def test_verify_run_sends_api_key_header(verify_ok_response):
+    captured: dict = {}
+    transport = httpx.MockTransport(_json_handler(verify_ok_response, captured))
+    client = VerdifaxClient(base_url="http://test.invalid", api_key="sk-test", transport=transport)
+    client.verify_run(1)
+    assert captured["request"].headers["X-Verdifax-Key"] == "sk-test"
+
+
+def test_verify_run_404_raises_api_error():
+    client = _client_with(_json_handler({"ok": False, "error": "run not found"}, status=404))
+    with pytest.raises(APIError) as exc_info:
+        client.verify_run(999)
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.message == "run not found"
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "42", 1.0, None])
+def test_verify_run_validates_run_id_before_request(bad):
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("no request should be sent")
+
+    client = _client_with(handler)
     with pytest.raises(ValidationError):
+        client.verify_run(bad)
+
+
+# ── verify (unsupported since 0.6.0) ───────────────────────────────────────────
+
+
+def test_verify_raises_with_explanation_and_sends_no_request():
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("verify() must not call the API")
+
+    client = _client_with(handler)
+    with pytest.raises(UnsupportedOperationError) as exc_info:
         client.verify(
-            manifest_hash="not-hex",
+            manifest_hash=MANIFEST_HASH,
             payload="hi",
             program_id=PROGRAM_ID,
             route_id=ROUTE_ID,
             registry_record_hash=REGISTRY_RECORD_HASH,
+            attested_context=AttestedContext(actor_id="user-1"),
         )
+    message = str(exc_info.value)
+    assert message == VERIFY_UNSUPPORTED_MESSAGE
+    assert "admission clock, nonce, and public-log entry" in message
+    assert "verify_run(run_id)" in message
+    assert "verify_determinism()" in message
+    assert isinstance(exc_info.value, VerdifaxError)
 
 
 # ── env-var configuration ──────────────────────────────────────────────────────
@@ -398,17 +468,3 @@ def test_attest_keeps_explicit_attested_false_when_no_other_fields_set():
     )
     block = captured["body"]["attested_context"]
     assert block == {"attested": False}
-
-
-def test_verify_passes_attested_context_through():
-    captured: dict = {}
-    client = _client_with(_success_handler(captured))
-    client.verify(
-        manifest_hash="9" * 64,
-        payload="hi",
-        program_id=PROGRAM_ID,
-        route_id=ROUTE_ID,
-        registry_record_hash=REGISTRY_RECORD_HASH,
-        attested_context=AttestedContext(actor_id="user-1"),
-    )
-    assert captured["body"]["attested_context"]["actor_id"] == "user-1"

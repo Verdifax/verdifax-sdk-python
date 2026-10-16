@@ -11,10 +11,12 @@ import verdifax
 from verdifax import VerdifaxClient
 from verdifax.helpers import attest_claude_response, attest_openai_response
 from tests.conftest import (
+    MANIFEST_HASH,
     PROGRAM_ID,
     REGISTRY_RECORD_HASH,
     ROUTE_ID,
     make_execute_response,
+    make_verify_ok_response,
 )
 
 
@@ -52,6 +54,42 @@ def test_module_level_attest_uses_env_var(monkeypatch):
         registry_record_hash=REGISTRY_RECORD_HASH,
     )
     assert receipt.manifest_hash == "9" * 64
+
+
+def test_module_level_verify_run_calls_runs_verify(monkeypatch):
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(200, json=make_verify_ok_response())
+
+    transport = httpx.MockTransport(handler)
+
+    def fake_from_env(**kwargs):
+        kwargs["transport"] = transport
+        return VerdifaxClient(**kwargs)
+
+    monkeypatch.setattr("verdifax.from_env", fake_from_env)
+
+    result = verdifax.verify_run(42, base_url="http://test.invalid", api_key="sk-test")
+    assert captured["request"].method == "GET"
+    assert captured["request"].url.path == "/runs/42/verify"
+    assert captured["request"].headers["X-Verdifax-Key"] == "sk-test"
+    assert isinstance(result, verdifax.VerifyResponse)
+    assert result.verified is True
+
+
+def test_module_level_verify_raises_with_explanation():
+    with pytest.raises(verdifax.UnsupportedOperationError) as exc_info:
+        verdifax.verify(
+            manifest_hash=MANIFEST_HASH,
+            payload="hi",
+            program_id=PROGRAM_ID,
+            route_id=ROUTE_ID,
+            registry_record_hash=REGISTRY_RECORD_HASH,
+        )
+    assert str(exc_info.value) == verdifax.client.VERIFY_UNSUPPORTED_MESSAGE
+    assert "verify_run(run_id)" in str(exc_info.value)
 
 
 def test_attest_claude_response_calls_attest_with_combined_payload():
