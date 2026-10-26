@@ -1,0 +1,18 @@
+# Keeps the dependency surfaces current: the package's own dependencies
+# and the pinned GitHub Actions SHAs, which Dependabot bumps with the
+# matching version comment kept in sync.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One combined PR per week instead of one per action.
+    groups:
+      actions:
+        patterns:
+          - "*"
