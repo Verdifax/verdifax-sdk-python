@@ -13,3 +13,17 @@ def test_default_timeout_is_at_least_90_seconds():
         assert client.timeout == DEFAULT_TIMEOUT
     finally:
         client.close()
+
+
+def test_docstrings_state_the_actual_default():
+    # 0.6.1 raised the default to 90 seconds but both constructors' docs
+    # still said 30 (round 38). The docs must name the real default.
+    import inspect
+    import re
+    from verdifax import AsyncVerdifaxClient
+
+    for cls in (VerdifaxClient, AsyncVerdifaxClient):
+        doc = inspect.getsource(cls)
+        stated = re.findall(r"Defaults to (\d+)", doc)
+        assert stated, f"{cls.__name__} docstring states no default timeout"
+        assert all(int(s) == int(DEFAULT_TIMEOUT) for s in stated), (cls.__name__, stated)

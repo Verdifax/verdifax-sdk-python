@@ -59,7 +59,7 @@ class AsyncVerdifaxClient:
             ``https://api.verdifax.com``.
         api_key: Optional API key sent as the ``X-Verdifax-Key`` header.
             Falls back to ``$VERDIFAX_API_KEY``.
-        timeout: Request timeout in seconds. Defaults to 30.
+        timeout: Request timeout in seconds. Defaults to 90.
         transport: Optional custom ``httpx.AsyncBaseTransport`` for tests.
     """
 
