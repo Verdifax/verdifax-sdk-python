@@ -1,0 +1,5 @@
+# Build and check tools for the release and CI build jobs, at exact
+# versions so a release cannot pick up a newer tool. Dependabot keeps
+# them current.
+build==1.6.1
+twine==7.0.0
