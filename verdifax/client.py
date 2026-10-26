@@ -44,7 +44,11 @@ from .models import (
 # silent wrong default is worse than an explicit one. Local
 # development opts in via $VERDIFAX_API_URL or the base_url argument.
 DEFAULT_BASE_URL = "https://api.verdifax.com"
-DEFAULT_TIMEOUT = 30.0
+# A sealed run makes two public-log entries and, with govern=True, an AI
+# review; on a slow day that takes longer than 30 seconds, and a client
+# that gave up then reported an error for a run the server went on to
+# seal. 90 seconds keeps the SDK from being the limit.
+DEFAULT_TIMEOUT = 90.0
 ENV_BASE_URL = "VERDIFAX_API_URL"
 ENV_API_KEY = "VERDIFAX_API_KEY"
 
