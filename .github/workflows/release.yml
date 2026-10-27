@@ -6,7 +6,13 @@ on:
       - "v*"
 
 jobs:
+  # The full CI suite (ci.yml) runs on the tagged commit first; the
+  # package is built and published only if it passes.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     environment:
       name: pypi
