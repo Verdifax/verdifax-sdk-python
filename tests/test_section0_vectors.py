@@ -258,14 +258,16 @@ def test_cres_rejects_short_ciphertext_hash() -> None:
 # with the SDK (e.g. when the SDK is installed via pip without the
 # parent repo).
 
-VECTORS_DIR_CANDIDATES = [
-    Path(__file__).resolve().parents[2] / "BUILDING DOCS" / "SECTION-0-SPECS" / "test-vectors",
-    Path(__file__).resolve().parents[3] / "BUILDING DOCS" / "SECTION-0-SPECS" / "test-vectors",
-]
-
 
 def _vectors_dir() -> Path | None:
-    for cand in VECTORS_DIR_CANDIDATES:
+    # The vectors live two or three directories above this file when the
+    # SDK is checked out beside the parent repository. A shallower
+    # checkout has fewer parents, so the depth is checked before use.
+    here = Path(__file__).resolve()
+    for depth in (2, 3):
+        if depth >= len(here.parents):
+            continue
+        cand = here.parents[depth] / "BUILDING DOCS" / "SECTION-0-SPECS" / "test-vectors"
         if cand.is_dir():
             return cand
     return None
