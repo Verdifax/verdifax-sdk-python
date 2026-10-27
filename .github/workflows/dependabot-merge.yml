@@ -1,0 +1,72 @@
+# Merges a Dependabot pull request once its CI workflow run has passed,
+# when every update in it is a minor or patch version. Dependabot does
+# not propose major versions (see .github/dependabot.yml), so a major
+# version, which changes behavior, is migrated deliberately by hand.
+#
+# Only the GitHub Actions group merges here. Package updates change
+# files the published release is built from, so they are merged by hand
+# with the next release.
+#
+# It runs after CI completes, in this repository's own context, and
+# reads only GitHub's API: it never checks out or runs the pull
+# request's code. A pull request it does not merge stays open, and
+# Verdifax's review replay fails once one is open for more than 14 days.
+#
+# A merge made with GITHUB_TOKEN starts no push workflows, so after
+# merging it starts the workflows a push to main would start.
+
+name: Dependabot merge
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      AUTO_BRANCHES: "dependabot/github_actions/"
+      MAIN_WORKFLOWS: "ci.yml"
+    steps:
+      - name: Merge a passing minor or patch update
+        run: |
+          set -euo pipefail
+          auto=no
+          for prefix in $AUTO_BRANCHES; do
+            case "$BRANCH" in "$prefix"*) auto=yes ;; esac
+          done
+          if [ "$auto" != yes ]; then
+            echo "::notice::$BRANCH is merged by hand"
+            exit 0
+          fi
+          pr=$(gh pr list -R "$REPO" --head "$BRANCH" --author "app/dependabot" --state open \
+            --json number,headRefOid --jq '.[] | select(.headRefOid == $ENV.SHA) | .number')
+          if [ -z "$pr" ]; then
+            echo "::notice::no open Dependabot pull request at $SHA"
+            exit 0
+          fi
+          types=$(gh api "repos/$REPO/commits/$SHA" --jq .commit.message | sed -n 's/^ *update-type: *//p' | sort -u)
+          if [ -z "$types" ] || printf '%s\n' "$types" | grep -qvx -e 'version-update:semver-minor' -e 'version-update:semver-patch'; then
+            echo "::notice::#$pr is merged by hand: its update types are $(printf '%s ' $types)"
+            exit 0
+          fi
+          gh pr merge "$pr" -R "$REPO" --squash --match-head-commit "$SHA"
+          gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" >/dev/null || true
+          for workflow in $MAIN_WORKFLOWS; do
+            gh workflow run "$workflow" -R "$REPO" --ref main
+          done
