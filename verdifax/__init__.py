@@ -90,7 +90,7 @@ def attest(
     Pass ``attested_context`` to record a caller-attested actor / model /
     decision block into the run's EPA artifact, see
     :class:`AttestedContext`. Pass ``ai_output_text`` to route the run
-    through AIVP-T4 governance (the live Claude adapter in production).
+    through AIVP governance (the live Claude adapter in production).
     """
     with from_env(base_url=base_url, api_key=api_key, timeout=timeout) as client:
         return client.attest(

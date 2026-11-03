@@ -417,7 +417,7 @@ def verify_determinism(
         registry_record_hash: 64-char lowercase hex §0 hash.
         reproducibility_context: Optional caller-declared environment
             fingerprint. Both invocations use the same context.
-        ai_output_text: Optional AI output text for AIVP-T4
+        ai_output_text: Optional AI output text for AIVP
             governance (mirrors the same parameter on ``attest``).
 
     Returns:

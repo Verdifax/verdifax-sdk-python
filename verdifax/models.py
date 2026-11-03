@@ -411,7 +411,7 @@ class ExecuteRequest(_AliasedModel):
         description="Caller-declared runtime fingerprint (optional).",
     )
     # AI output text, when supplied the orchestrator routes the run
-    # through the AIVP-T4 governance stage against the configured
+    # through the AIVP governance stage against the configured
     # adapter (the live Claude adapter in production). The sealed
     # manifest then carries the adapter ID and the AI-output hash,
     # and the audit PDF's maturity table classifies the AIVP stage
@@ -419,7 +419,7 @@ class ExecuteRequest(_AliasedModel):
     # governance (adapter records an empty input).
     ai_output_text: Optional[str] = Field(
         default=None,
-        description="AI output text for AIVP-T4 governance (optional).",
+        description="AI output text for AIVP governance (optional).",
     )
 
     def model_dump_request(self) -> dict[str, Any]:

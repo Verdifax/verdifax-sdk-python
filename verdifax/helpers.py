@@ -47,7 +47,7 @@ def _format_payload(provider: str, prompt: str, response: Union[str, bytes]) -> 
 
 
 def _governed_text(response: Union[str, bytes]) -> str:
-    """Decode the response for AIVP-T4 governance.
+    """Decode the response for AIVP governance.
 
     Governance reviews TEXT: a bytes response is decoded as UTF-8 and
     refused if it is not text, because silently governing a lossy
@@ -76,7 +76,7 @@ def attest_claude_response(
     client is created from environment variables.
 
     ``govern=True`` additionally routes the response text through the
-    orchestrator's AIVP-T4 review stage, where an independent reviewer
+    orchestrator's AIVP review stage, where an independent reviewer
     model can block or halt it before the run seals; the review outcome
     and the governed-output hash become part of the sealed record. Off
     by default because governance changes the manifest hash for the

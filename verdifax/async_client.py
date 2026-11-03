@@ -127,7 +127,7 @@ class AsyncVerdifaxClient:
 
         Accepts the same optional ``attested_context`` block ,
         see :class:`verdifax.models.AttestedContext`, and the same
-        optional ``ai_output_text`` for AIVP-T4 governance.
+        optional ``ai_output_text`` for AIVP governance.
         """
         request_body = self._build_execute_body(
             payload=payload,

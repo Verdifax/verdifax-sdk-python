@@ -162,7 +162,7 @@ class VerdifaxClient:
                 :func:`verdifax.research.capture_environment` for
                 auto-detection.
             ai_output_text: Optional AI output text to govern via the
-                AIVP-T4 stage. When supplied, the orchestrator routes
+                AIVP stage. When supplied, the orchestrator routes
                 the run through the configured AIVP adapter (the live
                 Claude adapter in production) and seals the adapter ID
                 plus the AI-output hash into the manifest. When
