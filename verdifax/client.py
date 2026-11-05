@@ -21,6 +21,7 @@ from typing import Any, NoReturn, Optional, Type, Union
 
 import httpx
 
+from ._signing import REQUEST_KEY_PATH, attach_signature, load_signing_key, request_key_body
 from ._transport import parse_response, wrap_transport_error
 from ._validation import (
     normalize_payload,
@@ -76,6 +77,10 @@ class VerdifaxClient:
         timeout: Request timeout in seconds. Defaults to 90.
         transport: Optional custom ``httpx.BaseTransport`` (useful for
             tests, e.g. with the ``respx`` library).
+        signing_key: Optional 32 raw bytes of an Ed25519 private key. When
+            set, every call to ``POST /execute`` carries a request signature.
+            Needs ``pip install "verdifax[signing]"``. The key is never sent
+            to the server.
     """
 
     def __init__(
@@ -84,7 +89,9 @@ class VerdifaxClient:
         api_key: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         transport: Optional[httpx.BaseTransport] = None,
+        signing_key: Optional[bytes] = None,
     ) -> None:
+        self._signing_key = None if signing_key is None else load_signing_key(signing_key)
         self.base_url = (base_url or os.environ.get(ENV_BASE_URL) or DEFAULT_BASE_URL).rstrip("/")
         self.api_key = api_key or os.environ.get(ENV_API_KEY)
         self.timeout = timeout
@@ -187,6 +194,7 @@ class VerdifaxClient:
             reproducibility_context=reproducibility_context,
             ai_output_text=ai_output_text,
         )
+        request_body = attach_signature(self._signing_key, request_body)
         try:
             response = self._http.post("/execute", json=request_body)
         except httpx.HTTPError as exc:
@@ -199,6 +207,33 @@ class VerdifaxClient:
                 response_body=body,
             )
         return AttestationReceipt.from_api_response(body)
+
+    def register_request_key(self) -> dict[str, Any]:
+        """Register this client's public key on its API key.
+
+        Sends the public key with a proof that this client holds the private
+        key. From then on the server refuses a run on this API key without a
+        request signature.
+
+        Raises:
+            ValidationError: If this client has no ``signing_key``.
+            APIError: For a non-2xx response.
+            ConnectionError: If the API was unreachable.
+        """
+        body = request_key_body(self._signing_key)
+        try:
+            response = self._http.post(REQUEST_KEY_PATH, json=body)
+        except httpx.HTTPError as exc:
+            raise wrap_transport_error(exc) from exc
+        return parse_response(response)
+
+    def clear_request_key(self) -> dict[str, Any]:
+        """Clear the registered public key, so signatures stop being required."""
+        try:
+            response = self._http.delete(REQUEST_KEY_PATH)
+        except httpx.HTTPError as exc:
+            raise wrap_transport_error(exc) from exc
+        return parse_response(response)
 
     def verify_run(self, run_id: int) -> VerifyResponse:
         """Ask the server to re-derive a recorded run's manifest hash and check its seal.

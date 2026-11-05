@@ -78,6 +78,43 @@ assert result.verified, result
 
 `verify()` used to call `attest()` again with the same inputs and compare manifest hashes. That comparison can never match in production: every run seals its own admission clock, nonce, and public-log entry into its manifest hash. It now raises `verdifax.UnsupportedOperationError` explaining this. Use `verify_run(run_id)` for a recorded run, or `verdifax.research.verify_determinism(...)` to check that the pipeline replays deterministically under a pinned clock and nonce.
 
+## Request signing
+
+Request signing is optional. A client with no signing key sends the same requests as before.
+
+You can register an Ed25519 public key on your API key, so that each run must also be signed with a private key that only you hold. The key pair is created on your machine, and Verdifax receives only the public key. Signing needs the `cryptography` package:
+
+```bash
+pip install "verdifax[signing]"
+```
+
+```python
+import verdifax
+from verdifax import VerdifaxClient
+
+# Run once, then store private_key as a secret. It is 32 raw bytes.
+private_key = verdifax.generate_request_key().private_key
+
+client = VerdifaxClient(signing_key=private_key)
+client.register_request_key()  # sends the public key with its proof
+
+# attest, execute, the provider helpers and verify_determinism now sign.
+receipt = client.attest(
+    payload="first signed attestation",
+    program_id="a" * 64,
+    route_id="route-test",
+    registry_record_hash="b" * 64,
+)
+
+client.clear_request_key()  # stops requiring signatures on this API key
+```
+
+`AsyncVerdifaxClient` takes the same `signing_key` and has the same two methods. `verdifax.attest` and the provider helpers accept `signing_key=` when they build their own client, and `verdifax shadow` takes `--signing-key-file`, a file holding the base64 private key.
+
+Registering a key changes that API key for every client that uses it: the server then refuses a run without a valid signature, so every caller on the key needs the private key. Each request carries the time and a fresh random nonce. The server refuses a repeated nonce and a time more than five minutes from its own clock.
+
+The signature shows the holder of the key requested the run. It does not show the key holder accepted the outcome.
+
 ## Helpers for popular providers
 
 ```python

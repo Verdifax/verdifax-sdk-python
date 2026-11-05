@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Optional, Union
 
 from .client import VerdifaxClient
+from .exceptions import ValidationError
 from .models import AttestationReceipt
 
 # Use US ASCII record/group separators so they are vanishingly unlikely to
@@ -58,6 +59,17 @@ def _governed_text(response: Union[str, bytes]) -> str:
     return response
 
 
+def _resolve_client(
+    client: Optional[VerdifaxClient], signing_key: Optional[bytes]
+) -> VerdifaxClient:
+    """Use the caller's client, or a temporary one with ``signing_key``."""
+    if client is None:
+        return VerdifaxClient(signing_key=signing_key)
+    if signing_key is not None:
+        raise ValidationError("pass signing_key to the client, not alongside client=")
+    return client
+
+
 def attest_claude_response(
     prompt: str,
     response: Union[str, bytes],
@@ -67,6 +79,7 @@ def attest_claude_response(
     *,
     govern: bool = False,
     client: Optional[VerdifaxClient] = None,
+    signing_key: Optional[bytes] = None,
 ) -> AttestationReceipt:
     """Attest an Anthropic Claude prompt/response pair.
 
@@ -83,11 +96,13 @@ def attest_claude_response(
     same prompt/response pair, which would silently break existing
     integrations' hash expectations; new integrations should turn it
     on, and the docs' canonical example does.
+
+    A ``client`` with a ``signing_key`` signs the request. Without a
+    ``client``, pass ``signing_key`` for the temporary client to use.
     """
     payload = _format_payload("claude", prompt, response)
     own_client = client is None
-    if client is None:
-        client = VerdifaxClient()
+    client = _resolve_client(client, signing_key)
     try:
         return client.attest(
             payload=payload,
@@ -110,6 +125,7 @@ def attest_openai_response(
     *,
     govern: bool = False,
     client: Optional[VerdifaxClient] = None,
+    signing_key: Optional[bytes] = None,
 ) -> AttestationReceipt:
     """Attest an OpenAI prompt/response pair.
 
@@ -119,8 +135,7 @@ def attest_openai_response(
     """
     payload = _format_payload("openai", prompt, response)
     own_client = client is None
-    if client is None:
-        client = VerdifaxClient()
+    client = _resolve_client(client, signing_key)
     try:
         return client.attest(
             payload=payload,

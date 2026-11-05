@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import NoReturn as _NoReturn, Optional as _Optional, Union as _Union
 
+from ._signing import RequestKeyPair, generate_request_key
 from ._version import __version__
 from .async_client import AsyncVerdifaxClient
 from .client import VERIFY_UNSUPPORTED_MESSAGE, VerdifaxClient
@@ -53,11 +54,13 @@ def from_env(
     base_url: _Optional[str] = None,
     api_key: _Optional[str] = None,
     timeout: _Optional[float] = None,
+    signing_key: _Optional[bytes] = None,
 ) -> VerdifaxClient:
     """Construct a :class:`VerdifaxClient` from environment variables.
 
     Honors ``VERDIFAX_API_URL`` and ``VERDIFAX_API_KEY``. Any explicit
     arguments override the corresponding environment variable.
+    ``signing_key`` is never read from the environment.
     """
     kwargs: dict[str, object] = {}
     if base_url is not None:
@@ -66,6 +69,8 @@ def from_env(
         kwargs["api_key"] = api_key
     if timeout is not None:
         kwargs["timeout"] = timeout
+    if signing_key is not None:
+        kwargs["signing_key"] = signing_key
     return VerdifaxClient(**kwargs)  # type: ignore[arg-type]
 
 
@@ -80,6 +85,7 @@ def attest(
     base_url: _Optional[str] = None,
     api_key: _Optional[str] = None,
     timeout: _Optional[float] = None,
+    signing_key: _Optional[bytes] = None,
 ) -> AttestationReceipt:
     """Module-level shortcut: attest a payload using a one-shot client.
 
@@ -91,8 +97,11 @@ def attest(
     decision block into the run's EPA artifact, see
     :class:`AttestedContext`. Pass ``ai_output_text`` to route the run
     through AIVP governance (the live Claude adapter in production).
+    Pass ``signing_key`` to sign the request; see :class:`VerdifaxClient`.
     """
-    with from_env(base_url=base_url, api_key=api_key, timeout=timeout) as client:
+    with from_env(
+        base_url=base_url, api_key=api_key, timeout=timeout, signing_key=signing_key
+    ) as client:
         return client.attest(
             payload=payload,
             program_id=program_id,
@@ -155,6 +164,7 @@ __all__ = [
     "ExecuteRequest",
     "ExecutionManifest",
     "KERNEL_NAMES",
+    "RequestKeyPair",
     "STAGE_NAMES",
     "StageError",
     "StageResult",
@@ -168,6 +178,7 @@ __all__ = [
     "attest_claude_response",
     "attest_openai_response",
     "from_env",
+    "generate_request_key",
     "research",
     "verify",
     "verify_run",

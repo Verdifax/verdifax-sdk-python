@@ -5,4 +5,5 @@ respx>=0.20
 black==26.10.1
 mypy>=1.5
 build>=1.0
+cryptography>=42.0
 twine>=4.0

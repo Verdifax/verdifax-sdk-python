@@ -24,6 +24,7 @@ and sealed manifest hash, then prints how to independently verify.
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import datetime as _dt
 import hashlib
@@ -34,6 +35,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__
+from ._signing import load_signing_key
 from .client import VerdifaxClient
 from .exceptions import VerdifaxError
 
@@ -73,6 +75,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="optional secret salt for keyed hashing (recommended; keep it, re-verification needs it)",
     )
     shadow.add_argument("--key", default="", help="Verdifax API key (or env VERDIFAX_API_KEY)")
+    shadow.add_argument(
+        "--signing-key-file",
+        default="",
+        metavar="PATH",
+        help="file holding a base64 Ed25519 private key, to sign each request "
+        "(needs verdifax[signing])",
+    )
     # The LIBRARY defaults to localhost (developer ergonomics for
     # people running the orchestrator locally). The CLI is a
     # customer-facing pilot tool, so it defaults to production;
@@ -165,6 +174,19 @@ def _run_shadow(args: argparse.Namespace) -> int:
         ("verdifax.shadow.schema.v1:" + ",".join(header)).encode("utf-8")
     ).hexdigest()
 
+    signing_key = None
+    if args.signing_key_file:
+        try:
+            key_text = Path(args.signing_key_file).read_text().strip()
+            signing_key = base64.b64decode(key_text, validate=True)
+            load_signing_key(signing_key)
+        except (OSError, ValueError):
+            print(f"error: cannot read a base64 key from {args.signing_key_file}", file=sys.stderr)
+            return 2
+        except VerdifaxError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
     base_url = args.base_url or os.environ.get("VERDIFAX_API_URL") or "https://api.verdifax.com"
     # api_key=None lets the client fall back to $VERDIFAX_API_KEY.
     api_key = args.key or None
@@ -180,7 +202,7 @@ def _run_shadow(args: argparse.Namespace) -> int:
     print()
 
     with (
-        VerdifaxClient(base_url=base_url, api_key=api_key) as client,
+        VerdifaxClient(base_url=base_url, api_key=api_key, signing_key=signing_key) as client,
         out_path.open("w", newline="", encoding="utf-8") as out_f,
     ):
         writer = csv.writer(out_f)

@@ -68,6 +68,7 @@ from typing import Any, Dict, List, Mapping, Optional, Union
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from ._signing import attach_signature
 from ._transport import parse_response, wrap_transport_error
 from ._validation import normalize_payload, validate_hex64, validate_route_id
 
@@ -450,6 +451,7 @@ def verify_determinism(
             exclude_none=True,
         )
 
+    body = attach_signature(client._signing_key, body)
     try:
         response = client._http.post("/execute/verify-determinism", json=body)
     except httpx.HTTPError as exc:
