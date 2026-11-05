@@ -68,9 +68,11 @@ from typing import Any, Dict, List, Mapping, Optional, Union
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from ._requests import attested_block, refuse_origin_hashes, reproducibility_block
 from ._signing import attach_signature
 from ._transport import parse_response, wrap_transport_error
 from ._validation import normalize_payload, validate_hex64, validate_route_id
+from .models import AttestedContext
 
 # ── ReproducibilityContext model ────────────────────────────────────────────
 
@@ -383,6 +385,52 @@ class DeterminismResult(BaseModel):
     diff: DeterminismDiff
 
 
+def determinism_body(
+    payload: Union[str, bytes],
+    program_id: str,
+    route_id: str,
+    registry_record_hash: str,
+    *,
+    reproducibility_context: Optional[ReproducibilityContext] = None,
+    ai_output_text: Optional[str] = None,
+    attested_context: Optional[AttestedContext] = None,
+    request_substance: Optional[Dict[str, Any]] = None,
+    authorization_chain: Optional[Dict[str, Any]] = None,
+    regulatory_scaffolding: Optional[Dict[str, Any]] = None,
+    causal_graph: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Validate the inputs and build the body of ``POST /execute/verify-determinism``."""
+    validate_hex64(program_id, "program_id")
+    validate_hex64(registry_record_hash, "registry_record_hash")
+    validate_route_id(route_id)
+    payload_text, payload_b64 = normalize_payload(payload)
+
+    body: Dict[str, Any] = {
+        "program_id": program_id,
+        "route_id": route_id,
+        "registry_record_hash": registry_record_hash,
+    }
+    if payload_text:
+        body["payload_text"] = payload_text
+    elif payload_b64:
+        body["payload"] = payload_b64
+    if ai_output_text:
+        body["ai_output_text"] = ai_output_text
+    if reproducibility_context is not None:
+        body["reproducibility_context"] = reproducibility_block(reproducibility_context)
+    if attested_context is not None:
+        body["attested_context"] = attested_block(attested_context)
+    refuse_origin_hashes(request_substance)
+    blocks = {
+        "request_substance": request_substance,
+        "authorization_chain": authorization_chain,
+        "regulatory_scaffolding": regulatory_scaffolding,
+        "causal_graph": causal_graph,
+    }
+    body.update({name: block for name, block in blocks.items() if block is not None})
+    return body
+
+
 def verify_determinism(
     client: Any,  # VerdifaxClient, Any to avoid circular import
     payload: Union[str, bytes],
@@ -392,6 +440,11 @@ def verify_determinism(
     *,
     reproducibility_context: Optional[ReproducibilityContext] = None,
     ai_output_text: Optional[str] = None,
+    attested_context: Optional[AttestedContext] = None,
+    request_substance: Optional[Dict[str, Any]] = None,
+    authorization_chain: Optional[Dict[str, Any]] = None,
+    regulatory_scaffolding: Optional[Dict[str, Any]] = None,
+    causal_graph: Optional[Dict[str, Any]] = None,
 ) -> DeterminismResult:
     """Run the same payload through the pipeline twice and report the comparison.
 
@@ -420,6 +473,11 @@ def verify_determinism(
             fingerprint. Both invocations use the same context.
         ai_output_text: Optional AI output text for AIVP
             governance (mirrors the same parameter on ``attest``).
+        attested_context: Optional caller-supplied actor / model /
+            decision block (mirrors the same parameter on ``attest``).
+        request_substance, authorization_chain, regulatory_scaffolding,
+            causal_graph: Optional caller-supplied blocks (mirror the same
+            parameters on ``attest``).
 
     Returns:
         A :class:`DeterminismResult` with the comparison summary.
@@ -428,29 +486,19 @@ def verify_determinism(
         ValidationError, StageError, APIError, ConnectionError, same
         as :meth:`VerdifaxClient.attest`.
     """
-    validate_hex64(program_id, "program_id")
-    validate_hex64(registry_record_hash, "registry_record_hash")
-    validate_route_id(route_id)
-    payload_text, payload_b64 = normalize_payload(payload)
-
-    body: Dict[str, Any] = {
-        "program_id": program_id,
-        "route_id": route_id,
-        "registry_record_hash": registry_record_hash,
-    }
-    if payload_text:
-        body["payload_text"] = payload_text
-    elif payload_b64:
-        body["payload"] = payload_b64
-    if ai_output_text:
-        body["ai_output_text"] = ai_output_text
-    if reproducibility_context is not None:
-        ctx = reproducibility_context.with_auto_declared()
-        body["reproducibility_context"] = ctx.model_dump(
-            mode="json",
-            exclude_none=True,
-        )
-
+    body = determinism_body(
+        payload,
+        program_id,
+        route_id,
+        registry_record_hash,
+        reproducibility_context=reproducibility_context,
+        ai_output_text=ai_output_text,
+        attested_context=attested_context,
+        request_substance=request_substance,
+        authorization_chain=authorization_chain,
+        regulatory_scaffolding=regulatory_scaffolding,
+        causal_graph=causal_graph,
+    )
     body = attach_signature(client._signing_key, body)
     try:
         response = client._http.post("/execute/verify-determinism", json=body)
@@ -467,5 +515,6 @@ __all__ = [
     "DeterminismResultRow",
     "ReproducibilityContext",
     "capture_environment",
+    "determinism_body",
     "verify_determinism",
 ]

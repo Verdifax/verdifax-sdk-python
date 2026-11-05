@@ -82,6 +82,12 @@ def make_verify_ok_response(recomputed_hash: str = MANIFEST_HASH) -> dict[str, A
     }
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retry tests count attempts; none of them should wait for the backoff."""
+    monkeypatch.setattr("verdifax._retry.backoff_delay", lambda base_delay, attempt: 0.0)
+
+
 @pytest.fixture
 def verify_ok_response() -> dict[str, Any]:
     return make_verify_ok_response()

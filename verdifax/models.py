@@ -38,6 +38,25 @@ KERNEL_NAMES: Tuple[str, ...] = (
 )
 
 
+# Every status the server gives a run. A newer server may add others, so
+# the models type ``status`` as a plain string.
+RUN_STATUSES: Tuple[str, ...] = (
+    "ok",
+    "probe",
+    "pepg_deny",
+    "ccv_halt",
+    "macc_halt",
+    "aivp_t4_halt",
+    "attestation_gap",
+    "stage_error",
+)
+
+
+def is_provided(value: Any) -> bool:
+    """A field counts as provided unless it is ``None``, empty text or ``False``."""
+    return value is not None and value is not False and value != ""
+
+
 class _AliasedModel(BaseModel):
     """Base for models that mirror Go-side PascalCase JSON keys."""
 
@@ -370,9 +389,7 @@ class AttestedContext(_AliasedModel):
         # instance, must access through the class instead. Resolved
         # via type(self) so the same code path works for any subclass.
         any_set = any(
-            getattr(self, fld) not in (None, "", False)
-            for fld in type(self).model_fields
-            if fld != "attested"
+            is_provided(getattr(self, fld)) for fld in type(self).model_fields if fld != "attested"
         )
         return self.model_copy(update={"attested": bool(any_set)})
 
@@ -421,6 +438,26 @@ class ExecuteRequest(_AliasedModel):
         default=None,
         description="AI output text for AIVP governance (optional).",
     )
+    # The four caller-supplied blocks. Each is recorded as supplied and is
+    # not checked by Verdifax. Leave out ``request_substance.origin``'s
+    # ``source_ip_hash`` and ``user_agent_hash``: the server computes
+    # those and refuses them.
+    request_substance: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Prompt, output, cost, latency and origin metadata (optional).",
+    )
+    authorization_chain: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Approval chain (optional).",
+    )
+    regulatory_scaffolding: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Regulatory metadata (optional).",
+    )
+    causal_graph: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="What led to this run (optional).",
+    )
 
     def model_dump_request(self) -> dict[str, Any]:
         """Serialize to the JSON shape the API expects (snake_case, no nulls)."""
@@ -428,13 +465,148 @@ class ExecuteRequest(_AliasedModel):
         return data
 
 
+class Run(_AliasedModel):
+    """One recorded run, from ``GET /runs/{id}``.
+
+    ``manifest`` is the stored JSON as a ``dict``: a refused or halted run
+    stores a manifest together with its receipt, so its shape varies.
+    """
+
+    id: int
+    created_at: str = ""
+    payload_hash: str = ""
+    program_id: str = ""
+    route_id: str = ""
+    manifest_hash: str = ""
+    duration_ms: int = 0
+    status: str = ""
+    error_stage: str = ""
+    error_message: str = ""
+    manifest: Optional[dict[str, Any]] = None
+
+
+class RunSummary(_AliasedModel):
+    """One row of ``GET /runs`` or ``GET /runs/search``."""
+
+    id: int
+    created_at: str = ""
+    program_id: str = ""
+    route_id: str = ""
+    manifest_hash: str = ""
+    duration_ms: int = 0
+    status: str = ""
+    outcome_kind: str = ""
+    error_stage: str = ""
+    execution_region: str = ""
+
+
+class RunList(_AliasedModel):
+    """A page of runs. ``total`` counts every match, not just this page."""
+
+    total: int = 0
+    limit: int = 0
+    offset: int = 0
+    runs: List[RunSummary] = Field(default_factory=list)
+
+
+class ExportRow(_AliasedModel):
+    """One run in an evidence export: what the server stored, not a verdict."""
+
+    run_id: int
+    created_at: str = ""
+    status: str = ""
+    error_stage: str = ""
+    route_id: str = ""
+    manifest_hash: str = ""
+    log_entry_id: str = ""
+    leaf_hash: str = ""
+    complete_record_entry_id: str = ""
+    complete_record_leaf_hash: str = ""
+
+
+class RunsExport(_AliasedModel):
+    """The JSON form of ``GET /runs/export``.
+
+    ``to`` is the upper bound the server used. ``total`` counts the runs
+    held for the period, ``returned`` the rows in ``runs``, and
+    ``truncated`` is ``True`` when the period holds more rows than this
+    response. ``by_status`` counts the rows returned.
+    """
+
+    ok: bool = True
+    to: str = ""
+    total: int = 0
+    returned: int = 0
+    truncated: bool = False
+    by_status: dict[str, int] = Field(default_factory=dict)
+    runs: List[ExportRow] = Field(default_factory=list)
+
+
+class RunsExportCSV(_AliasedModel):
+    """The CSV form of ``GET /runs/export``.
+
+    ``csv`` is the text, unparsed. ``total`` counts the runs held for the
+    period, and ``truncated`` is ``True`` when the period holds more rows
+    than ``csv``.
+    """
+
+    csv: str
+    total: int
+    truncated: bool
+
+
+class ExecuteBatchResult(_AliasedModel):
+    """One row of a batch response.
+
+    A successful row has ``manifest``. A failed row has ``error``, and
+    ``error_stage`` and a typed receipt when the pipeline halted. A row
+    refused before it ran has no ``run_id``. The manifest fields stay as
+    ``dict`` so that no row fails to parse.
+    """
+
+    index: int
+    ok: bool
+    run_id: Optional[int] = None
+    manifest_hash: Optional[str] = None
+    manifest: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+    error_stage: Optional[str] = None
+    duration_ms: int = 0
+    partial_manifest: Optional[dict[str, Any]] = None
+    deny_receipt: Optional[dict[str, Any]] = None
+    ccv_halt_receipt: Optional[dict[str, Any]] = None
+    macc_halt_receipt: Optional[dict[str, Any]] = None
+    aivp_t4_halt_receipt: Optional[dict[str, Any]] = None
+    attestation_gap_receipt: Optional[dict[str, Any]] = None
+
+
+class ExecuteBatchResponse(_AliasedModel):
+    """The body of ``POST /execute/batch``. Failed rows are in ``results``."""
+
+    ok: bool = True
+    total: int = 0
+    successful: int = 0
+    failed: int = 0
+    duration_ms: int = 0
+    results: List[ExecuteBatchResult] = Field(default_factory=list)
+
+
 __all__ = [
     "AttestationReceipt",
     "AttestedContext",
     "DCAEEngineHint",
+    "ExecuteBatchResponse",
+    "ExecuteBatchResult",
     "ExecuteRequest",
     "ExecutionManifest",
+    "ExportRow",
     "KERNEL_NAMES",
+    "RUN_STATUSES",
+    "Run",
+    "RunList",
+    "RunSummary",
+    "RunsExport",
+    "RunsExportCSV",
     "STAGE_NAMES",
     "StageResult",
     "VerifyResponse",

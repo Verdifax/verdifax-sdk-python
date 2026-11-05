@@ -1,9 +1,7 @@
 """Convenience helpers for popular AI providers.
 
-These wrap :func:`verdifax.attest` so callers can attest a model
-prompt/response pair in a single call. The helpers concatenate the
-prompt and response into a deterministic payload string before
-attesting; identical inputs produce identical manifest hashes.
+These attest a model prompt/response pair in a single call, as one
+canonical JSON payload: see :func:`verdifax.format_provider_payload`.
 """
 
 from __future__ import annotations
@@ -13,50 +11,6 @@ from typing import Optional, Union
 from .client import VerdifaxClient
 from .exceptions import ValidationError
 from .models import AttestationReceipt
-
-# Use US ASCII record/group separators so they are vanishingly unlikely to
-# appear inside real prompt/response text and split it ambiguously.
-_RECORD_SEP = "\x1e"
-_PROMPT_PREFIX = "verdifax.helper.prompt.v1"
-_RESPONSE_PREFIX = "verdifax.helper.response.v1"
-
-
-def _format_payload(provider: str, prompt: str, response: Union[str, bytes]) -> str:
-    if isinstance(response, bytes):
-        # Keep the bytes value typed as bytes for the except branch so
-        # mypy can resolve b64encode's argument type. Reassigning
-        # ``response`` to str inside the try-block narrows the union but
-        # also widens the binding back to ``Union[str, bytes]`` in the
-        # except branch, capturing the raw bytes separately keeps the
-        # type discriminator clean.
-        raw_bytes = response
-        try:
-            response = raw_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            import base64
-
-            response = "base64:" + base64.b64encode(raw_bytes).decode("ascii")
-    return _RECORD_SEP.join(
-        [
-            f"verdifax.helper.{provider}.v1",
-            _PROMPT_PREFIX,
-            prompt,
-            _RESPONSE_PREFIX,
-            response,
-        ]
-    )
-
-
-def _governed_text(response: Union[str, bytes]) -> str:
-    """Decode the response for AIVP governance.
-
-    Governance reviews TEXT: a bytes response is decoded as UTF-8 and
-    refused if it is not text, because silently governing a lossy
-    decode would seal a review of something other than the output.
-    """
-    if isinstance(response, bytes):
-        return response.decode("utf-8")
-    return response
 
 
 def _resolve_client(
@@ -81,35 +35,24 @@ def attest_claude_response(
     client: Optional[VerdifaxClient] = None,
     signing_key: Optional[bytes] = None,
 ) -> AttestationReceipt:
-    """Attest an Anthropic Claude prompt/response pair.
+    """Attest an Anthropic Claude prompt/response pair, as provider ``anthropic``.
 
-    Concatenates the prompt and response into a deterministic payload and
-    runs the standard Verdifax pipeline against it. Pass an explicit
-    ``client`` to reuse an existing connection pool; otherwise a temporary
-    client is created from environment variables.
+    Pass an explicit ``client`` to reuse an existing connection pool;
+    otherwise a temporary client is created from environment variables.
 
-    ``govern=True`` additionally routes the response text through the
-    orchestrator's AIVP review stage, where an independent reviewer
-    model can block or halt it before the run seals; the review outcome
-    and the governed-output hash become part of the sealed record. Off
-    by default because governance changes the manifest hash for the
-    same prompt/response pair, which would silently break existing
-    integrations' hash expectations; new integrations should turn it
-    on, and the docs' canonical example does.
+    ``govern=True`` also sends the response text for the orchestrator's
+    AIVP review, which runs on Anthropic in production and can block or
+    halt the run before it seals. It is off by default, so the text goes
+    for review only when the caller asks.
 
     A ``client`` with a ``signing_key`` signs the request. Without a
     ``client``, pass ``signing_key`` for the temporary client to use.
     """
-    payload = _format_payload("claude", prompt, response)
     own_client = client is None
     client = _resolve_client(client, signing_key)
     try:
-        return client.attest(
-            payload=payload,
-            program_id=program_id,
-            route_id=route_id,
-            registry_record_hash=registry_record_hash,
-            ai_output_text=_governed_text(response) if govern else None,
+        return client.attest_claude_response(
+            prompt, response, program_id, route_id, registry_record_hash, govern=govern
         )
     finally:
         if own_client:
@@ -127,22 +70,15 @@ def attest_openai_response(
     client: Optional[VerdifaxClient] = None,
     signing_key: Optional[bytes] = None,
 ) -> AttestationReceipt:
-    """Attest an OpenAI prompt/response pair.
+    """Attest an OpenAI prompt/response pair, as provider ``openai``.
 
-    Same shape as :func:`attest_claude_response` but tags the payload as
-    OpenAI-sourced so identical text under different providers produces
-    different manifest hashes.
+    Same shape as :func:`attest_claude_response`.
     """
-    payload = _format_payload("openai", prompt, response)
     own_client = client is None
     client = _resolve_client(client, signing_key)
     try:
-        return client.attest(
-            payload=payload,
-            program_id=program_id,
-            route_id=route_id,
-            registry_record_hash=registry_record_hash,
-            ai_output_text=_governed_text(response) if govern else None,
+        return client.attest_openai_response(
+            prompt, response, program_id, route_id, registry_record_hash, govern=govern
         )
     finally:
         if own_client:

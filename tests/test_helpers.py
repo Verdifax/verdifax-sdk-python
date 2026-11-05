@@ -106,7 +106,7 @@ def test_attest_claude_response_calls_attest_with_combined_payload():
     )
     assert receipt.manifest_hash == "9" * 64
     payload = captured["body"]["payload_text"]
-    assert "claude" in payload
+    assert '"provider":"anthropic"' in payload
     assert "What is the boiling point of water?" in payload
     assert "100 °C at sea level." in payload
 

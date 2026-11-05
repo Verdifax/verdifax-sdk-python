@@ -36,7 +36,7 @@ from typing import Optional
 
 from . import __version__
 from ._signing import load_signing_key
-from .client import VerdifaxClient
+from .client import VerdifaxClient, env_base_url
 from .exceptions import VerdifaxError
 
 # Deterministic defaults for pilots that have no program registry yet.
@@ -85,11 +85,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     # The LIBRARY defaults to localhost (developer ergonomics for
     # people running the orchestrator locally). The CLI is a
     # customer-facing pilot tool, so it defaults to production;
-    # VERDIFAX_API_URL or --base-url still override.
+    # VERDIFAX_BASE_URL, VERDIFAX_API_URL or --base-url still override.
     shadow.add_argument(
         "--base-url",
         default="",
-        help="API base URL (default: $VERDIFAX_API_URL or https://api.verdifax.com)",
+        help="API base URL (default: $VERDIFAX_BASE_URL, $VERDIFAX_API_URL or https://api.verdifax.com)",
     )
     shadow.add_argument(
         "--route",
@@ -187,7 +187,7 @@ def _run_shadow(args: argparse.Namespace) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
 
-    base_url = args.base_url or os.environ.get("VERDIFAX_API_URL") or "https://api.verdifax.com"
+    base_url = args.base_url or env_base_url() or "https://api.verdifax.com"
     # api_key=None lets the client fall back to $VERDIFAX_API_KEY.
     api_key = args.key or None
 

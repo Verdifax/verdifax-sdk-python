@@ -14,18 +14,34 @@ Three-line integration:
 
 The SDK targets the Verdifax orchestrator REST API. By default it talks
 to the production API at ``https://api.verdifax.com``; override with
-``$VERDIFAX_API_URL`` or by
+``$VERDIFAX_BASE_URL``, ``$VERDIFAX_API_URL`` or by
 passing ``base_url`` to :class:`VerdifaxClient`.
 """
 
 from __future__ import annotations
 
+import os as _os
 from typing import NoReturn as _NoReturn, Optional as _Optional, Union as _Union
 
-from ._signing import RequestKeyPair, generate_request_key
+from ._requests import MAX_BATCH_ROWS, format_provider_payload
+from ._retry import DEFAULT_MAX_RETRIES
+from ._signing import (
+    RequestKeyPair,
+    generate_request_key,
+    request_key_registration_body,
+    request_signature_preimage,
+    sign_request,
+)
+from ._validation import validate_hex64, validate_route_id
 from ._version import __version__
 from .async_client import AsyncVerdifaxClient
-from .client import VERIFY_UNSUPPORTED_MESSAGE, VerdifaxClient
+from .client import (
+    ENV_MAX_RETRIES,
+    ENV_TIMEOUT_MS,
+    ENV_USER_AGENT,
+    VERIFY_UNSUPPORTED_MESSAGE,
+    VerdifaxClient,
+)
 from .exceptions import (
     APIError,
     ConnectionError,
@@ -37,17 +53,36 @@ from .exceptions import (
 from .helpers import attest_claude_response, attest_openai_response
 from .models import (
     KERNEL_NAMES,
+    RUN_STATUSES,
     STAGE_NAMES,
     AttestationReceipt,
     AttestedContext,
     DCAEEngineHint,
+    ExecuteBatchResponse,
+    ExecuteBatchResult,
     ExecuteRequest,
     ExecutionManifest,
+    ExportRow,
+    Run,
+    RunList,
+    RunSummary,
+    RunsExport,
+    RunsExportCSV,
     StageResult,
     VerifyResponse,
 )
 from . import research  # reproducible-research toolkit (Option B Phase 3)
 from . import section0  # §0 cross-language canonical hash verifier
+
+
+def _env_int(name: str) -> _Optional[int]:
+    raw = _os.environ.get(name)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValidationError(f"{name}={raw!r} is not an integer") from exc
 
 
 def from_env(
@@ -58,11 +93,26 @@ def from_env(
 ) -> VerdifaxClient:
     """Construct a :class:`VerdifaxClient` from environment variables.
 
-    Honors ``VERDIFAX_API_URL`` and ``VERDIFAX_API_KEY``. Any explicit
-    arguments override the corresponding environment variable.
-    ``signing_key`` is never read from the environment.
+    Honors ``VERDIFAX_BASE_URL``, then ``VERDIFAX_API_URL``, and
+    ``VERDIFAX_API_KEY``, ``VERDIFAX_TIMEOUT_MS``, ``VERDIFAX_USER_AGENT``
+    and ``VERDIFAX_MAX_RETRIES``. Any explicit arguments override the
+    corresponding environment variable. ``signing_key`` is never read from
+    the environment.
+
+    Raises:
+        ValidationError: If ``VERDIFAX_TIMEOUT_MS`` or
+            ``VERDIFAX_MAX_RETRIES`` is not an integer.
     """
     kwargs: dict[str, object] = {}
+    timeout_ms = _env_int(ENV_TIMEOUT_MS)
+    if timeout_ms is not None:
+        kwargs["timeout"] = timeout_ms / 1000
+    max_retries = _env_int(ENV_MAX_RETRIES)
+    if max_retries is not None:
+        kwargs["max_retries"] = max_retries
+    user_agent = _os.environ.get(ENV_USER_AGENT)
+    if user_agent:
+        kwargs["user_agent"] = user_agent
     if base_url is not None:
         kwargs["base_url"] = base_url
     if api_key is not None:
@@ -161,10 +211,21 @@ __all__ = [
     "AttestedContext",
     "ConnectionError",
     "DCAEEngineHint",
+    "DEFAULT_MAX_RETRIES",
+    "ExecuteBatchResponse",
+    "ExecuteBatchResult",
     "ExecuteRequest",
     "ExecutionManifest",
+    "ExportRow",
     "KERNEL_NAMES",
+    "MAX_BATCH_ROWS",
+    "RUN_STATUSES",
     "RequestKeyPair",
+    "Run",
+    "RunList",
+    "RunSummary",
+    "RunsExport",
+    "RunsExportCSV",
     "STAGE_NAMES",
     "StageError",
     "StageResult",
@@ -177,9 +238,16 @@ __all__ = [
     "attest",
     "attest_claude_response",
     "attest_openai_response",
+    "format_provider_payload",
     "from_env",
     "generate_request_key",
+    "request_key_registration_body",
+    "request_signature_preimage",
     "research",
+    "section0",
+    "sign_request",
+    "validate_hex64",
+    "validate_route_id",
     "verify",
     "verify_run",
 ]

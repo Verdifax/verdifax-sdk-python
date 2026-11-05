@@ -146,6 +146,26 @@ def sign_body(
     }
 
 
+def sign_request(
+    signing_key: bytes,
+    body: dict[str, Any],
+    signed_at: Optional[str] = None,
+    nonce: Optional[str] = None,
+) -> dict[str, str]:
+    """Build the ``request_signature`` block for ``body`` without sending it.
+
+    A client with a ``signing_key`` does this itself. ``signed_at`` and
+    ``nonce`` default to the current time and fresh random bytes. A nonce
+    the server has already seen is refused.
+    """
+    return sign_body(load_signing_key(signing_key), body, signed_at, nonce)
+
+
+def request_key_registration_body(signing_key: bytes) -> dict[str, str]:
+    """Build the body of ``POST /keys/request-key`` without sending it."""
+    return request_key_body(load_signing_key(signing_key))
+
+
 def attach_signature(key: "Optional[Ed25519PrivateKey]", body: dict[str, Any]) -> dict[str, Any]:
     """Return ``body`` with a fresh signature; with no key, return it unchanged."""
     if key is None:
@@ -170,6 +190,8 @@ __all__ = [
     "load_signing_key",
     "payload_hash",
     "request_key_body",
+    "request_key_registration_body",
     "request_signature_preimage",
     "sign_body",
+    "sign_request",
 ]

@@ -44,6 +44,15 @@ def parse_response(response: httpx.Response) -> dict[str, Any]:
     )
 
 
+def checked_response(response: httpx.Response) -> httpx.Response:
+    """Return ``response`` for reading a non-JSON or byte-exact body.
+
+    A non-2xx response raises the same errors as :func:`parse_response`.
+    """
+    parse_response(response)
+    return response
+
+
 def _extract_message(body: Any) -> Optional[str]:
     if isinstance(body, dict):
         for key in ("error", "message", "detail"):
@@ -58,4 +67,4 @@ def wrap_transport_error(exc: httpx.HTTPError) -> VerdifaxConnectionError:
     return VerdifaxConnectionError(f"verdifax: failed to reach API: {exc}")
 
 
-__all__ = ["parse_response", "wrap_transport_error"]
+__all__ = ["checked_response", "parse_response", "wrap_transport_error"]

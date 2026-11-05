@@ -8,11 +8,14 @@ HTTP 400 round-trip.
 
 from __future__ import annotations
 
+import re
 from typing import Union
 
 from .exceptions import ValidationError
 
 _HEX_CHARS = frozenset("0123456789abcdef")
+_ROUTE_ID_MAX_LENGTH = 256
+_ROUTE_ID_PATTERN = re.compile(r"[\x20-\x7E]+")
 
 
 def validate_hex64(value: str, field_name: str) -> None:
@@ -30,21 +33,30 @@ def validate_hex64(value: str, field_name: str) -> None:
 
 
 def validate_route_id(value: str) -> None:
-    """Raise ``ValidationError`` unless ``value`` is a non-empty string."""
+    """Raise ``ValidationError`` unless ``value`` is 1 to 256 printable ASCII characters."""
     if not isinstance(value, str) or not value:
         raise ValidationError("route_id must be a non-empty string")
+    if len(value) > _ROUTE_ID_MAX_LENGTH:
+        raise ValidationError(f"route_id is too long ({len(value)} > {_ROUTE_ID_MAX_LENGTH})")
+    if not _ROUTE_ID_PATTERN.fullmatch(value):
+        raise ValidationError("route_id contains non-printable-ASCII character")
+
+
+def validate_positive_id(value: int, field_name: str) -> None:
+    """Raise ``ValidationError`` unless ``value`` is a positive integer ID.
+
+    ``bool`` is rejected even though it subclasses ``int``, so a stray
+    ``True`` is not silently sent as ID 1.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError(f"{field_name} must be an int, got {type(value).__name__}")
+    if value <= 0:
+        raise ValidationError(f"{field_name} must be > 0, got {value}")
 
 
 def validate_run_id(value: int) -> None:
-    """Raise ``ValidationError`` unless ``value`` is a positive integer run ID.
-
-    ``bool`` is rejected even though it subclasses ``int``, so a stray
-    ``True`` is not silently sent as run 1.
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValidationError(f"run_id must be an int, got {type(value).__name__}")
-    if value <= 0:
-        raise ValidationError(f"run_id must be > 0, got {value}")
+    """Raise ``ValidationError`` unless ``value`` is a positive integer run ID."""
+    validate_positive_id(value, "run_id")
 
 
 def normalize_payload(payload: Union[str, bytes]) -> tuple[str, str]:
@@ -66,4 +78,10 @@ def normalize_payload(payload: Union[str, bytes]) -> tuple[str, str]:
     raise ValidationError(f"payload must be str or bytes, got {type(payload).__name__}")
 
 
-__all__ = ["normalize_payload", "validate_hex64", "validate_route_id", "validate_run_id"]
+__all__ = [
+    "normalize_payload",
+    "validate_hex64",
+    "validate_positive_id",
+    "validate_route_id",
+    "validate_run_id",
+]
