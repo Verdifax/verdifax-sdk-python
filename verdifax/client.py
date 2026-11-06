@@ -25,7 +25,9 @@ import httpx
 from ._requests import (
     BatchRow,
     admin_erase_body,
+    attest_receipt,
     batch_body,
+    batch_response,
     parse_export_csv,
     provider_attest_args,
     query_params,
@@ -34,9 +36,17 @@ from ._requests import (
     run_path,
 )
 from ._retry import DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY, RetryingClient
-from ._signing import REQUEST_KEY_PATH, attach_signature, load_signing_key, request_key_body
+from ._signing import (
+    REQUEST_KEY_PATH,
+    attach_signature,
+    load_signing_key,
+    request_key_body,
+    request_key_clear_body,
+    request_key_rotation_body,
+)
 from ._transport import checked_response, parse_response, wrap_transport_error
 from ._validation import (
+    job_block,
     normalize_payload,
     validate_hex64,
     validate_positive_id,
@@ -44,7 +54,8 @@ from ._validation import (
     validate_run_id,
 )
 from ._version import __version__
-from .exceptions import APIError, UnsupportedOperationError, ValidationError
+from .exceptions import UnsupportedOperationError, ValidationError
+from .jobs import Job
 from .models import (
     AttestationReceipt,
     AttestedContext,
@@ -111,9 +122,9 @@ class VerdifaxClient:
         transport: Optional custom ``httpx.BaseTransport`` (useful for
             tests, e.g. with the ``respx`` library).
         signing_key: Optional 32 raw bytes of an Ed25519 private key. When
-            set, every call to ``POST /execute`` carries a request signature,
-            each row of a batch carries its own, and a determinism check
-            carries one. Needs ``pip install "verdifax[signing]"``. The key is never sent
+            set, every call to ``POST /execute`` is sent as signed text with
+            a request signature, each row of a batch carries its own, and a
+            determinism check carries one. Needs ``pip install "verdifax[signing]"``. The key is never sent
             to the server.
     """
 
@@ -188,6 +199,7 @@ class VerdifaxClient:
         authorization_chain: Optional[dict[str, Any]] = None,
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
+        job: Optional[Mapping[str, Any]] = None,
     ) -> AttestationReceipt:
         """Run the nine-stage pipeline against ``payload`` and return a receipt.
 
@@ -225,17 +237,26 @@ class VerdifaxClient:
             authorization_chain: Optional approval chain.
             regulatory_scaffolding: Optional regulatory metadata.
             causal_graph: Optional record of what led to this run.
+            job: Optional place of this run in a job map:
+                ``{"job_id", "step_id", "previous_record_hashes",
+                "external_previous", "final"}``. The two lists are sorted
+                and repeats removed for you. :meth:`job` builds this block.
 
         ``request_substance``, ``authorization_chain``,
         ``regulatory_scaffolding`` and ``causal_graph`` are recorded as
         supplied, and Verdifax does not check them.
 
         Returns:
-            An :class:`AttestationReceipt` containing the sealed manifest.
+            An :class:`AttestationReceipt` containing the sealed manifest,
+            with ``record_hash`` and, when the call was signed,
+            ``signed_request``.
 
         Raises:
             ValidationError: If any input fails client-side validation.
             StageError: If a specific pipeline stage rejected the request.
+                ``record_hash`` on the error holds the hash of a refused or
+                halted run, and ``signed_request`` the exact text of a signed
+                one.
             APIError: For any other non-2xx response from the API.
             ConnectionError: If the API was unreachable.
         """
@@ -251,20 +272,14 @@ class VerdifaxClient:
             authorization_chain=authorization_chain,
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
+            job=job,
         )
         request_body = attach_signature(self._signing_key, request_body)
         try:
             response = self._http.post("/execute", json=request_body)
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc) from exc
-        body = parse_response(response)
-        if "manifest" not in body:
-            raise APIError(
-                message="API response missing 'manifest'",
-                status_code=response.status_code,
-                response_body=body,
-            )
-        return AttestationReceipt.from_api_response(body)
+        return attest_receipt(response, request_body)
 
     def register_request_key(self) -> dict[str, Any]:
         """Register this client's public key on its API key.
@@ -285,13 +300,41 @@ class VerdifaxClient:
             raise wrap_transport_error(exc) from exc
         return parse_response(response)
 
+    def rotate_request_key(self, new_signing_key: bytes) -> dict[str, Any]:
+        """Replace the registered public key, approved by the current key.
+
+        Sends the new public key with its proof, and an approval signed by
+        this client's current key. After success this client signs with the
+        new key. After a failure it keeps the current one.
+
+        Args:
+            new_signing_key: 32 raw bytes of the new Ed25519 private key.
+
+        Raises:
+            ValidationError: If this client has no ``signing_key``, or the
+                new key is not 32 raw bytes.
+            APIError: For a non-2xx response.
+            ConnectionError: If the API was unreachable.
+        """
+        new_key = load_signing_key(new_signing_key)
+        body = request_key_rotation_body(self._signing_key, new_key)
+        result = self._send_json("POST", REQUEST_KEY_PATH, body)
+        self._signing_key = new_key
+        return result
+
     def clear_request_key(self) -> dict[str, Any]:
-        """Clear the registered public key, so signatures stop being required."""
-        try:
-            response = self._http.delete(REQUEST_KEY_PATH)
-        except httpx.HTTPError as exc:
-            raise wrap_transport_error(exc) from exc
-        return parse_response(response)
+        """Clear the registered public key, so signatures stop being required.
+
+        With a ``signing_key`` the current key approves the clear, which the
+        server requires. After success this client drops its signing key and
+        sends unsigned requests, because the server refuses a signature on an
+        API key with no registered key. After a failure it keeps the key.
+        """
+        result = self._send_json(
+            "DELETE", REQUEST_KEY_PATH, request_key_clear_body(self._signing_key)
+        )
+        self._signing_key = None
+        return result
 
     def verify_run(self, run_id: int) -> VerifyResponse:
         """Ask the server to re-derive a recorded run's manifest hash and check its seal.
@@ -377,8 +420,13 @@ class VerdifaxClient:
         authorization_chain: Optional[dict[str, Any]] = None,
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
+        job: Optional[Mapping[str, Any]] = None,
     ) -> ExecutionManifest:
-        """Lower-level alternative to :meth:`attest` that returns just the manifest."""
+        """Lower-level alternative to :meth:`attest` that returns just the manifest.
+
+        Use :meth:`attest` to keep ``signed_request`` from a sealed run. An
+        error from this method carries it as :meth:`attest`'s does.
+        """
         return self.attest(
             payload=payload,
             program_id=program_id,
@@ -391,6 +439,7 @@ class VerdifaxClient:
             authorization_chain=authorization_chain,
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
+            job=job,
         ).manifest
 
     def get_run(self, run_id: int) -> Run:
@@ -450,7 +499,12 @@ class VerdifaxClient:
             raise wrap_transport_error(exc) from exc
         return RunList.model_validate(parse_response(response))
 
-    def export_runs(self, from_: Optional[str] = None, to: Optional[str] = None) -> RunsExport:
+    def export_runs(
+        self,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> RunsExport:
         """List what the server holds for this key in a period, as parsed JSON.
 
         Calls ``GET /runs/export``. Failures are included, up to 10,000 rows;
@@ -461,13 +515,14 @@ class VerdifaxClient:
         Args:
             from_: RFC 3339 time, inclusive.
             to: RFC 3339 time, exclusive. Defaults to the time of the request.
+            job_id: Limit the export to the runs of one job.
 
         Raises:
             APIError: For a non-2xx response, for example 400 for a time the
                 server cannot parse.
             ConnectionError: If the API was unreachable.
         """
-        params = query_params(format="json", **{"from": from_, "to": to})
+        params = query_params(format="json", job_id=job_id, **{"from": from_, "to": to})
         try:
             response = self._http.get("/runs/export", params=params)
         except httpx.HTTPError as exc:
@@ -475,7 +530,10 @@ class VerdifaxClient:
         return RunsExport.model_validate(parse_response(response))
 
     def export_runs_csv(
-        self, from_: Optional[str] = None, to: Optional[str] = None
+        self,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        job_id: Optional[str] = None,
     ) -> RunsExportCSV:
         """The same rows as :meth:`export_runs`: raw CSV text with its counts.
 
@@ -488,7 +546,7 @@ class VerdifaxClient:
             APIError: For a non-2xx response.
             ConnectionError: If the API was unreachable.
         """
-        params = query_params(format="csv", **{"from": from_, "to": to})
+        params = query_params(format="csv", job_id=job_id, **{"from": from_, "to": to})
         try:
             response = self._http.get("/runs/export", params=params)
         except httpx.HTTPError as exc:
@@ -500,15 +558,16 @@ class VerdifaxClient:
 
         Each row is an :class:`ExecuteRequest`, or a mapping with the same
         names as :meth:`attest`. With a ``signing_key`` each row carries its
-        own signature and nonce. The rows are not checked here: the server
-        reports a bad row in that row's result, and a failed row does not
-        raise.
+        own signature and nonce. Only a row's ``job`` block is checked here:
+        the server reports any other bad value in that row's result, and a
+        failed row does not raise.
 
         This is one POST and it is never retried. After a timeout the server
         may have run some or all of the rows.
 
         Raises:
-            ValidationError: If there are no rows, or more than 1,000.
+            ValidationError: If there are no rows, more than 1,000, or an
+                invalid ``job`` block.
             APIError: For a non-2xx response.
             ConnectionError: If the API was unreachable.
         """
@@ -517,7 +576,15 @@ class VerdifaxClient:
             response = self._http.post("/execute/batch", json=body)
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc) from exc
-        return ExecuteBatchResponse.model_validate(parse_response(response))
+        return batch_response(parse_response(response), body)
+
+    def job(self, job_id: str) -> Job:
+        """Start a helper that runs the steps of one job and links them.
+
+        Raises:
+            ValidationError: If ``job_id`` is not a valid job name.
+        """
+        return Job(self, job_id)
 
     def verify_determinism(
         self,
@@ -670,6 +737,11 @@ class VerdifaxClient:
         validate_positive_id(key_id, "key_id")
         self._send_json("DELETE", f"/admin/keys/{key_id}")
 
+    def admin_clear_request_key(self, key_id: int) -> dict[str, Any]:
+        """Clear the request key of an API key whose holder lost it."""
+        validate_positive_id(key_id, "key_id")
+        return self._send_json("DELETE", f"/admin/keys/{key_id}/request-key")
+
     def admin_erase(
         self,
         run_id: int,
@@ -692,12 +764,14 @@ class VerdifaxClient:
         registry_record_hash: str,
         *,
         govern: bool = False,
+        job: Optional[Mapping[str, Any]] = None,
     ) -> AttestationReceipt:
         """Same as :func:`verdifax.attest_claude_response` with this client."""
         return self.attest(
             program_id=program_id,
             route_id=route_id,
             registry_record_hash=registry_record_hash,
+            job=job,
             **provider_attest_args("anthropic", prompt, response, govern),
         )
 
@@ -710,12 +784,14 @@ class VerdifaxClient:
         registry_record_hash: str,
         *,
         govern: bool = False,
+        job: Optional[Mapping[str, Any]] = None,
     ) -> AttestationReceipt:
         """Same as :func:`verdifax.attest_openai_response` with this client."""
         return self.attest(
             program_id=program_id,
             route_id=route_id,
             registry_record_hash=registry_record_hash,
+            job=job,
             **provider_attest_args("openai", prompt, response, govern),
         )
 
@@ -733,6 +809,7 @@ class VerdifaxClient:
         authorization_chain: Optional[dict[str, Any]] = None,
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
+        job: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
         validate_hex64(program_id, "program_id")
         validate_hex64(registry_record_hash, "registry_record_hash")
@@ -761,6 +838,7 @@ class VerdifaxClient:
             authorization_chain=authorization_chain,
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
+            job=job_block(job),
         )
         return request.model_dump_request()
 

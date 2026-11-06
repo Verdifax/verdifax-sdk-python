@@ -9,13 +9,17 @@ HTTP 400 round-trip.
 from __future__ import annotations
 
 import re
-from typing import Union
+from typing import Any, Mapping, Optional, Union
 
 from .exceptions import ValidationError
 
 _HEX_CHARS = frozenset("0123456789abcdef")
 _ROUTE_ID_MAX_LENGTH = 256
 _ROUTE_ID_PATTERN = re.compile(r"[\x20-\x7E]+")
+_JOB_NAME_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+_JOB_FIELDS = frozenset(
+    {"job_id", "step_id", "previous_record_hashes", "external_previous", "final"}
+)
 
 
 def validate_hex64(value: str, field_name: str) -> None:
@@ -40,6 +44,57 @@ def validate_route_id(value: str) -> None:
         raise ValidationError(f"route_id is too long ({len(value)} > {_ROUTE_ID_MAX_LENGTH})")
     if not _ROUTE_ID_PATTERN.fullmatch(value):
         raise ValidationError("route_id contains non-printable-ASCII character")
+
+
+def validate_job_name(value: Any, field_name: str) -> None:
+    """Raise ``ValidationError`` unless ``value`` is a valid job or step id.
+
+    That is 1 to 128 letters, digits, dots, underscores, colons or dashes.
+    """
+    if not isinstance(value, str) or not _JOB_NAME_PATTERN.fullmatch(value):
+        raise ValidationError(
+            f"{field_name} must be 1 to 128 letters, digits, dots, underscores, " "colons or dashes"
+        )
+
+
+def _job_hash_list(value: Any, field_name: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValidationError(f"job {field_name} must be a list of strings")
+    return sorted(set(value))
+
+
+def job_block(job: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """Check a job block and return the form the server requires.
+
+    The two hash lists are sorted with repeats removed, an empty list is
+    left out, and ``final`` is left out when false, so one job block has
+    exactly one form. ``None`` means no job.
+
+    Raises:
+        ValidationError: If a name is invalid, ``final`` is not a ``bool``,
+            a hash list is not a ``list`` of strings, or a field is unknown.
+            A typo must never silently drop a link.
+    """
+    if job is None:
+        return None
+    if not isinstance(job, Mapping):
+        raise ValidationError(f"job must be a mapping, got {type(job).__name__}")
+    unknown = sorted(str(name) for name in job if name not in _JOB_FIELDS)
+    if unknown:
+        raise ValidationError(f"job has unknown fields: {', '.join(unknown)}")
+    validate_job_name(job.get("job_id"), "job_id")
+    validate_job_name(job.get("step_id"), "step_id")
+    final = job.get("final", False)
+    if not isinstance(final, bool):
+        raise ValidationError(f"job final must be a bool, got {type(final).__name__}")
+    block: dict[str, Any] = {"job_id": job["job_id"], "step_id": job["step_id"]}
+    for name in ("previous_record_hashes", "external_previous"):
+        hashes = _job_hash_list(job[name], name) if name in job else []
+        if hashes:
+            block[name] = hashes
+    if final:
+        block["final"] = True
+    return block
 
 
 def validate_positive_id(value: int, field_name: str) -> None:
@@ -79,8 +134,10 @@ def normalize_payload(payload: Union[str, bytes]) -> tuple[str, str]:
 
 
 __all__ = [
+    "job_block",
     "normalize_payload",
     "validate_hex64",
+    "validate_job_name",
     "validate_positive_id",
     "validate_route_id",
     "validate_run_id",

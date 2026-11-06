@@ -47,6 +47,7 @@ class APIError(VerdifaxError):
         status_code: HTTP status returned by the API.
         message: Human-readable error message from the response body, if any.
         response_body: The decoded JSON response body, when available.
+        signed_request: The exact signed text, when the refused call was signed.
     """
 
     def __init__(
@@ -59,6 +60,13 @@ class APIError(VerdifaxError):
         self.status_code = status_code
         self.message = message
         self.response_body = response_body
+        self.signed_request: Optional[str] = None
+
+    @property
+    def record_hash(self) -> Optional[str]:
+        """The sealed record of a refused or halted run, from the error body."""
+        value = (self.response_body or {}).get("record_hash")
+        return value if isinstance(value, str) and value else None
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"APIError(status_code={self.status_code!r}, message={self.message!r})"

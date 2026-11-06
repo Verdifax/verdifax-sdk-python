@@ -21,16 +21,25 @@ passing ``base_url`` to :class:`VerdifaxClient`.
 from __future__ import annotations
 
 import os as _os
-from typing import NoReturn as _NoReturn, Optional as _Optional, Union as _Union
+from typing import (
+    Any as _Any,
+    Mapping as _Mapping,
+    NoReturn as _NoReturn,
+    Optional as _Optional,
+    Union as _Union,
+)
 
 from ._requests import MAX_BATCH_ROWS, format_provider_payload
 from ._retry import DEFAULT_MAX_RETRIES
 from ._signing import (
     RequestKeyPair,
     generate_request_key,
+    request_key_change_preimage,
     request_key_registration_body,
     request_signature_preimage,
+    request_signature_preimage_v2,
     sign_request,
+    sign_request_v2,
 )
 from ._validation import validate_hex64, validate_route_id
 from ._version import __version__
@@ -51,6 +60,7 @@ from .exceptions import (
     VerdifaxError,
 )
 from .helpers import attest_claude_response, attest_openai_response
+from .jobs import AsyncJob, Job
 from .models import (
     KERNEL_NAMES,
     RUN_STATUSES,
@@ -136,6 +146,7 @@ def attest(
     api_key: _Optional[str] = None,
     timeout: _Optional[float] = None,
     signing_key: _Optional[bytes] = None,
+    job: _Optional[_Mapping[str, _Any]] = None,
 ) -> AttestationReceipt:
     """Module-level shortcut: attest a payload using a one-shot client.
 
@@ -148,6 +159,8 @@ def attest(
     :class:`AttestedContext`. Pass ``ai_output_text`` to route the run
     through AIVP governance (the live Claude adapter in production).
     Pass ``signing_key`` to sign the request; see :class:`VerdifaxClient`.
+    Pass ``job`` to place the run in a job map; see
+    :meth:`VerdifaxClient.attest`.
     """
     with from_env(
         base_url=base_url, api_key=api_key, timeout=timeout, signing_key=signing_key
@@ -159,6 +172,7 @@ def attest(
             registry_record_hash=registry_record_hash,
             attested_context=attested_context,
             ai_output_text=ai_output_text,
+            job=job,
         )
 
 
@@ -206,6 +220,7 @@ def verify(
 
 __all__ = [
     "APIError",
+    "AsyncJob",
     "AsyncVerdifaxClient",
     "AttestationReceipt",
     "AttestedContext",
@@ -217,6 +232,7 @@ __all__ = [
     "ExecuteRequest",
     "ExecutionManifest",
     "ExportRow",
+    "Job",
     "KERNEL_NAMES",
     "MAX_BATCH_ROWS",
     "RUN_STATUSES",
@@ -241,11 +257,14 @@ __all__ = [
     "format_provider_payload",
     "from_env",
     "generate_request_key",
+    "request_key_change_preimage",
     "request_key_registration_body",
     "request_signature_preimage",
+    "request_signature_preimage_v2",
     "research",
     "section0",
     "sign_request",
+    "sign_request_v2",
     "validate_hex64",
     "validate_route_id",
     "verify",

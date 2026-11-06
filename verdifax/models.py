@@ -245,9 +245,22 @@ class AttestationReceipt(_AliasedModel):
     manifest_hash: str
     manifest: ExecutionManifest
     received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    record_hash: Optional[str] = Field(
+        default=None,
+        description=(
+            "the hash that places this run in a job map: the response's record_hash, "
+            "then its top-level manifest_hash, then the manifest's own hash"
+        ),
+    )
+    signed_request: Optional[str] = Field(
+        default=None,
+        description="the exact signed text, for verdifax-verify --request, when signed",
+    )
 
     @classmethod
-    def from_api_response(cls, body: dict[str, Any]) -> "AttestationReceipt":
+    def from_api_response(
+        cls, body: dict[str, Any], signed_request: Optional[str] = None
+    ) -> "AttestationReceipt":
         """Construct a receipt from a raw POST /execute response body."""
         manifest = ExecutionManifest.model_validate(body["manifest"])
         return cls(
@@ -256,6 +269,13 @@ class AttestationReceipt(_AliasedModel):
             duration_ms=int(body.get("duration_ms", 0)),
             manifest_hash=manifest.manifest_hash,
             manifest=manifest,
+            record_hash=(
+                body.get("record_hash")
+                or body.get("manifest_hash")
+                or manifest.manifest_hash
+                or None
+            ),
+            signed_request=signed_request,
         )
 
 
@@ -458,6 +478,10 @@ class ExecuteRequest(_AliasedModel):
         default=None,
         description="What led to this run (optional).",
     )
+    job: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Where this run sits in a job map (optional).",
+    )
 
     def model_dump_request(self) -> dict[str, Any]:
         """Serialize to the JSON shape the API expects (snake_case, no nulls)."""
@@ -522,6 +546,9 @@ class ExportRow(_AliasedModel):
     leaf_hash: str = ""
     complete_record_entry_id: str = ""
     complete_record_leaf_hash: str = ""
+    anchor_source: str = ""
+    job_id: str = ""
+    step_id: str = ""
 
 
 class RunsExport(_AliasedModel):
@@ -561,12 +588,15 @@ class ExecuteBatchResult(_AliasedModel):
     A successful row has ``manifest``. A failed row has ``error``, and
     ``error_stage`` and a typed receipt when the pipeline halted. A row
     refused before it ran has no ``run_id``. The manifest fields stay as
-    ``dict`` so that no row fails to parse.
+    ``dict`` so that no row fails to parse. ``signed_request`` is the exact
+    text of a signed row.
     """
 
     index: int
     ok: bool
     run_id: Optional[int] = None
+    record_hash: Optional[str] = None
+    signed_request: Optional[str] = None
     manifest_hash: Optional[str] = None
     manifest: Optional[dict[str, Any]] = None
     error: Optional[str] = None

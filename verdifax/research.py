@@ -70,7 +70,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ._requests import attested_block, refuse_origin_hashes, reproducibility_block
 from ._signing import attach_signature
-from ._transport import parse_response, wrap_transport_error
+from ._transport import parse_signed_response, wrap_transport_error
 from ._validation import normalize_payload, validate_hex64, validate_route_id
 from .models import AttestedContext
 
@@ -383,6 +383,7 @@ class DeterminismResult(BaseModel):
     first: DeterminismResultRow
     second: DeterminismResultRow
     diff: DeterminismDiff
+    signed_request: Optional[str] = None
 
 
 def determinism_body(
@@ -429,6 +430,13 @@ def determinism_body(
     }
     body.update({name: block for name, block in blocks.items() if block is not None})
     return body
+
+
+def determinism_result(response: httpx.Response, request_body: Dict[str, Any]) -> DeterminismResult:
+    """Read a determinism response. The result and any error carry the signed text."""
+    parsed = parse_signed_response(response, request_body)
+    signed_request = request_body.get("signed_request")
+    return DeterminismResult.model_validate({**parsed, "signed_request": signed_request})
 
 
 def verify_determinism(
@@ -505,8 +513,7 @@ def verify_determinism(
     except httpx.HTTPError as exc:
         raise wrap_transport_error(exc) from exc
 
-    parsed = parse_response(response)
-    return DeterminismResult.model_validate(parsed)
+    return determinism_result(response, body)
 
 
 __all__ = [
@@ -516,5 +523,6 @@ __all__ = [
     "ReproducibilityContext",
     "capture_environment",
     "determinism_body",
+    "determinism_result",
     "verify_determinism",
 ]

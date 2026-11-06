@@ -1,6 +1,6 @@
 # Verdifax Python SDK
 
-Cryptographic attestation for AI inference. Three lines: send a payload, get a signed manifest hash you can give to an auditor.
+Cryptographic attestation for AI inference. Three lines: send a payload, get a sealed manifest hash, anchored on a public log, you can give to an auditor.
 
 ## Install
 
@@ -98,8 +98,8 @@ asyncio.run(main())
 | `verify_run(run_id)` | `GET /runs/{run_id}/verify` | required |
 | `list_runs(limit, offset)` | `GET /runs` | required |
 | `search_runs(...)` | `GET /runs/search` | required |
-| `export_runs(from_, to)` | `GET /runs/export` | required |
-| `export_runs_csv(from_, to)` | `GET /runs/export?format=csv` | required |
+| `export_runs(from_, to, job_id)` | `GET /runs/export` | required |
+| `export_runs_csv(from_, to, job_id)` | `GET /runs/export?format=csv` | required |
 | `get_run_artifacts(run_id)` | `GET /runs/{run_id}/artifacts` | required |
 | `get_run_report(run_id)` | `GET /runs/{run_id}/report` | required |
 | `download_audit_pdf(run_id, format)` | `GET /runs/{run_id}/report.pdf` | required |
@@ -117,13 +117,15 @@ asyncio.run(main())
 | `get_public_bundle_by_token(token)` | `GET /public/runs/{token}/bundle.json` | none |
 | `dcae_verify(bundle)` | `POST /dcae/verify` | none |
 | `register_request_key()` | `POST /keys/request-key` | required |
+| `rotate_request_key(new_signing_key)` | `POST /keys/request-key` | required |
 | `clear_request_key()` | `DELETE /keys/request-key` | required |
 | `admin_create_key(name)` | `POST /admin/keys` | admin |
 | `admin_list_keys()` | `GET /admin/keys` | admin |
 | `admin_revoke_key(key_id)` | `DELETE /admin/keys/{id}` | admin |
+| `admin_clear_request_key(key_id)` | `DELETE /admin/keys/{id}/request-key` | admin |
 | `admin_erase(...)` | `POST /admin/erase` | admin |
 
-These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `request_key_registration_body`, `request_signature_preimage`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
+These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
 
 `get_run_artifacts`, `get_public_bundle` and `get_public_bundle_by_token` return the exact JSON text the server sent, so you can save it and check it with `verdifax-verify`.
 
@@ -141,6 +143,8 @@ for row in batch.results:
     print(row.index, row.ok, row.run_id, row.error)
 ```
 
+A row can carry a `job` block, which is checked before sending. With a signing key each result row has its own `signed_request`, and every row that sealed a record has its `record_hash`.
+
 The client's `timeout` covers the whole batch, so raise it for a large one. A batch is one POST and it is never retried. After a timeout the server may have run some or all of the rows, so list your runs before you send them again.
 
 ## Evidence export
@@ -157,7 +161,41 @@ if export.truncated:
 csv_text = export.csv
 ```
 
+Pass `job_id` to either method to export one job. Rows carry `anchor_source`, `job_id` and `step_id`.
+
 The export states what the server stored, not a verdict. A call that never reached Verdifax cannot appear in it. Both forms say when a period holds more rows than the export returned: check `truncated`. `export_runs_csv` reads `total` and `truncated` from the `X-Verdifax-Total` and `X-Verdifax-Truncated` response headers, and raises `VerdifaxError` if the server does not send them. In the CSV, a `route_id` that a spreadsheet could read as a formula gets a leading `'`.
+
+## Jobs
+
+A job is a map of sealed steps. Each step names the records it directly follows, so a missing, swapped or repeated step is visible, and work can split into branches and join again.
+
+`client.job(job_id)` returns a helper that keeps the map for you. `step` takes everything `attest` takes, runs one step, and links it by step id. It raises `ValidationError` for any other option, `job` included, before anything is sent, so a typo like `afer` can never silently use the default link:
+
+```python
+run = {"program_id": "a" * 64, "route_id": "route-test", "registry_record_hash": "b" * 64}
+
+job = client.job("loan-1")
+job.step("intake", payload="application", **run)
+
+# Two steps after intake.
+job.step("credit", after=["intake"], payload="credit check", **run)
+job.step("fraud", after=["intake"], payload="fraud check", **run)
+
+# A final step joining them.
+job.step("decide", after=["credit", "fraud"], final=True, payload="decision", **run)
+
+print(job.record_hashes)  # step id to record hash
+```
+
+Without `after`, a step follows the step run just before it through this helper, or nothing if it is the first. `after=[]` starts another root step. An `after` naming a step the helper has not recorded raises `ValidationError` before anything is sent. `external_previous` takes record hashes from another account. `AsyncVerdifaxClient.job` returns the same helper with `step` as a coroutine.
+
+A refused or halted step still seals a record. The helper records its hash, then raises the same error `attest` raises, so a later step can name the refused step in `after`. A call that sealed nothing, such as a step id already taken, a timeout or a connection failure, is not recorded and does not change which step comes next by default. After a timeout or a connection failure the server may have run the step. A successful step with no `record_hash` uses a top-level `manifest_hash`, then the manifest's own hash, and with none of them the helper raises `VerdifaxError`, so the map never silently gets a gap.
+
+Without the helper, pass `job={"job_id": ..., "step_id": ..., "previous_record_hashes": [...], "external_previous": [...], "final": True}` to `attest`, `execute` or a provider helper, or put it in a batch row. A determinism check runs twice, so it cannot be a job step. `job_id` and `step_id` are 1 to 128 letters, digits, `.`, `_`, `:` or `-`, and the client raises `ValidationError` for any other name. It also refuses an unknown field, a `final` that is not a `bool` and a hash list that is not a `list`, because a typo must never silently drop a link. It sorts both lists and removes repeats for you.
+
+The receipt from `attest` has `record_hash`, and an error from a refused or halted run has it too.
+
+A job map covers what was sent. It cannot show a step that was never sent.
 
 ## Determinism check
 
@@ -209,16 +247,31 @@ receipt = client.attest(
     registry_record_hash="b" * 64,
 )
 
+# The current key approves its replacement. This client then signs with the new key.
+client.rotate_request_key(verdifax.generate_request_key().private_key)
+
 client.clear_request_key()  # stops requiring signatures on this API key
 ```
 
-`AsyncVerdifaxClient` takes the same `signing_key` and has the same two methods. `verdifax.attest` and the provider helpers accept `signing_key=` when they build their own client, and `verdifax shadow` takes `--signing-key-file`, a file holding the base64 private key.
+`AsyncVerdifaxClient` takes the same `signing_key` and has the same three methods. `verdifax.attest` and the provider helpers accept `signing_key=` when they build their own client, and `verdifax shadow` takes `--signing-key-file`, a file holding the base64 private key.
+
+A signed call sends the request once, as exact JSON text, with a signature that covers those bytes and the job block:
+
+```json
+{"signed_request": "<the JSON text>", "request_signature": {"version": "2", "signature": "...", "signed_at": "...", "nonce": "..."}}
+```
+
+The receipt keeps that text as `signed_request`. Save it to a file to check the record with `verdifax-verify --request FILE`. An error from a refused or halted run carries `signed_request` as an attribute, and it is left out of the error's message, so it does not reach your logs. `execute` returns only the manifest, so use `attest` to keep the text from a sealed run. `DeterminismResult` and each row of a batch result carry it too. The job helper keeps it in `job.signed_requests`, step id to text, beside `job.record_hashes`, refused and halted steps included.
+
+Replacing or clearing a registered key needs the approval of the current key, and `rotate_request_key` and `clear_request_key` send it for you. After a clear the client drops its signing key and sends unsigned requests, because the server refuses a signature on an API key with no registered key. If you lost the key, an administrator can clear it with `admin_clear_request_key(key_id)`. That call does not change the admin client's own signing key.
 
 Registering a key changes that API key for every client that uses it: the server then refuses a run without a valid signature, so every caller on the key needs the private key. Each request carries the time and a fresh random nonce. The server refuses a repeated nonce and a time more than five minutes from its own clock.
 
 In a batch each row carries its own signature and nonce, and the server checks them as it reaches that row. A row refused for its signature comes back in `results`, so a repeated batch returns HTTP 200 with failed rows, and a row reached more than five minutes after it was signed fails the same way. A determinism check uses one signature for the request, and repeating it returns HTTP 403.
 
-The signature shows the holder of the key requested the run. It does not show the key holder accepted the outcome.
+A signature shows who requested the run, not that they accepted the outcome.
+
+`sign_request` and `request_signature_preimage` still build the earlier version 1 signature, which the server refuses for a job step. `sign_request_v2` and `request_signature_preimage_v2` build what a client sends.
 
 ## Optional execute fields
 
@@ -240,7 +293,7 @@ receipt = verdifax.attest_claude_response(
 )
 ```
 
-There is also `verdifax.attest_openai_response(...)` with the same signature, and both are methods on `VerdifaxClient` and `AsyncVerdifaxClient`.
+There is also `verdifax.attest_openai_response(...)` with the same signature, and both are methods on `VerdifaxClient` and `AsyncVerdifaxClient`. Both accept the same optional `job` block as `attest`, and return `record_hash` and `signed_request` the same way.
 
 The helpers attest a prompt and response as one payload: canonical JSON, exactly `{"prompt":...,"provider":...,"response":...}` with sorted keys and no extra whitespace, UTF-8, with `provider` set to `anthropic` or `openai`. `verdifax.format_provider_payload` builds that text. All four Verdifax SDKs produce the same bytes. A helper call from an earlier version used a different payload, so it gave a different hash for the same text; records already stored are not touched.
 

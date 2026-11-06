@@ -50,15 +50,35 @@ INPUTS = {
 }
 
 
+def inner(body: dict) -> dict:
+    """The request inside a signed body."""
+    return json.loads(body["signed_request"])
+
+
 def preimage_for(body: dict, payload_bytes: bytes) -> bytes:
     """The bytes the server rebuilds, written out independently of the SDK."""
+    assert set(body) == {"signed_request", "request_signature"}
     sig = body["request_signature"]
+    assert set(sig) == {"version", "signature", "signed_at", "nonce"}
+    assert sig["version"] == "2"
+    text = body["signed_request"].encode("utf-8")
+    request = json.loads(text)
+    job = request.get("job", {})
+    ai_output = request.get("ai_output_text")
     fields = [
-        b"verdifax.request.v1",
+        b"verdifax.request.v2",
+        hashlib.sha256(text).hexdigest().encode(),
         hashlib.sha256(payload_bytes).hexdigest().encode(),
-        body["program_id"].encode(),
-        body["route_id"].encode(),
-        body["registry_record_hash"].encode(),
+        request["program_id"].encode(),
+        request["route_id"].encode(),
+        request["registry_record_hash"].encode(),
+        hashlib.sha256(ai_output.encode("utf-8")).hexdigest().encode() if ai_output else b"",
+        b"verdifax.job.v1",
+        job.get("job_id", "").encode(),
+        job.get("step_id", "").encode(),
+        ",".join(job.get("previous_record_hashes", [])).encode(),
+        ",".join(job.get("external_previous", [])).encode(),
+        b"true" if job.get("final") else b"false",
         sig["signed_at"].encode(),
         sig["nonce"].encode(),
     ]
@@ -159,7 +179,7 @@ def test_utf8_bytes_are_sent_and_hashed_as_text():
     requests: list[httpx.Request] = []
     client_with(requests).attest(payload=b"hello", **INPUTS)
     body = bodies(requests)[0]
-    assert body["payload_text"] == "hello"
+    assert inner(body)["payload_text"] == "hello"
     assert_verifies(body, b"hello")
 
 
@@ -167,8 +187,8 @@ def test_binary_payload_hashes_the_base64_string_not_the_decoded_bytes():
     requests: list[httpx.Request] = []
     client_with(requests).attest(payload=b"\xff\xfe\x00", **INPUTS)
     body = bodies(requests)[0]
-    assert "payload_text" not in body
-    assert_verifies(body, body["payload"].encode("ascii"))
+    assert "payload_text" not in inner(body)
+    assert_verifies(body, inner(body)["payload"].encode("ascii"))
 
 
 def test_non_empty_payload_text_wins_over_payload():
@@ -219,7 +239,7 @@ def test_provider_helpers_sign_through_the_client(helper):
     requests: list[httpx.Request] = []
     helper("prompt", "response", **INPUTS, client=client_with(requests))
     body = bodies(requests)[0]
-    assert_verifies(body, body["payload_text"].encode("utf-8"))
+    assert_verifies(body, inner(body)["payload_text"].encode("utf-8"))
 
 
 @pytest.mark.parametrize("helper", [attest_claude_response, attest_openai_response])
@@ -235,7 +255,7 @@ def test_provider_helpers_sign_with_a_temporary_client(helper):
     with mock.patch.object(VerdifaxClient, "__init__", init):
         helper("prompt", "response", **INPUTS, signing_key=SEED)
     body = bodies(requests)[0]
-    assert_verifies(body, body["payload_text"].encode("utf-8"))
+    assert_verifies(body, inner(body)["payload_text"].encode("utf-8"))
 
 
 def test_provider_helper_refuses_a_key_beside_a_client():
@@ -268,7 +288,7 @@ def test_verify_determinism_binary_payload_hashes_the_base64_string():
     client = client_with(requests, response=determinism_response())
     verify_determinism(client, b"\xff\xfe", **INPUTS)
     body = bodies(requests)[0]
-    assert_verifies(body, body["payload"].encode("ascii"))
+    assert_verifies(body, inner(body)["payload"].encode("ascii"))
 
 
 def test_verify_determinism_unsigned_client_sends_no_request_signature():
@@ -299,7 +319,7 @@ def test_shadow_cli_signs_each_row(tmp_path):
     rows = bodies(requests)
     assert len(rows) == 2
     for body in rows:
-        assert_verifies(body, body["payload_text"].encode("utf-8"))
+        assert_verifies(body, inner(body)["payload_text"].encode("utf-8"))
     assert rows[0]["request_signature"]["nonce"] != rows[1]["request_signature"]["nonce"]
 
 

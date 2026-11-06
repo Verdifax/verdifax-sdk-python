@@ -6,7 +6,7 @@ Centralizing this logic keeps :class:`VerdifaxClient` and
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import httpx
 
@@ -44,6 +44,21 @@ def parse_response(response: httpx.Response) -> dict[str, Any]:
     )
 
 
+def parse_signed_response(
+    response: httpx.Response, request_body: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Same as :func:`parse_response`, and an error keeps the signed text.
+
+    A refused or halted run is often the one an auditor most wants to check,
+    so its error carries what a success would.
+    """
+    try:
+        return parse_response(response)
+    except APIError as exc:
+        exc.signed_request = request_body.get("signed_request")
+        raise
+
+
 def checked_response(response: httpx.Response) -> httpx.Response:
     """Return ``response`` for reading a non-JSON or byte-exact body.
 
@@ -67,4 +82,4 @@ def wrap_transport_error(exc: httpx.HTTPError) -> VerdifaxConnectionError:
     return VerdifaxConnectionError(f"verdifax: failed to reach API: {exc}")
 
 
-__all__ = ["checked_response", "parse_response", "wrap_transport_error"]
+__all__ = ["checked_response", "parse_response", "parse_signed_response", "wrap_transport_error"]

@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 import httpx
 import pytest
 
-from tests.test_signing import INPUTS, SEED, assert_verifies
+from tests.test_signing import INPUTS, SEED, assert_verifies, inner
 from verdifax import (
     APIError,
     AsyncVerdifaxClient,
@@ -24,8 +24,8 @@ from verdifax import (
     VerdifaxClient,
     VerdifaxError,
 )
-from verdifax._requests import _signed_row, batch_body, batch_row, query_params
-from verdifax._signing import load_signing_key
+from verdifax._requests import batch_body, batch_row, query_params
+from verdifax._signing import attach_signature, load_signing_key
 from verdifax._transport import checked_response
 from verdifax.research import ReproducibilityContext, determinism_body
 
@@ -180,14 +180,14 @@ def test_batch_row_refuses_a_row_of_the_wrong_kind():
 
 
 def test_signed_row_signs_a_row_with_missing_fields_as_empty():
-    row = _signed_row(load_signing_key(SEED), {"payload_text": "x"})
-    assert "request_signature" in row
-    assert "program_id" not in row
+    row = attach_signature(load_signing_key(SEED), {"payload_text": "x"})
+    assert set(row) == {"signed_request", "request_signature"}
+    assert "program_id" not in inner(row)
 
 
 def test_signed_row_without_a_key_returns_the_row():
     row = {"payload_text": "x"}
-    assert _signed_row(None, row) is row
+    assert attach_signature(None, row) is row
 
 
 def test_batch_body_limits():
@@ -365,7 +365,7 @@ def test_a_signed_batch_gives_each_row_its_own_signature_and_nonce():
     rows = sent(seen[0])["runs"]
     assert len(rows) == 3
     for row in rows:
-        assert_verifies(row, row["payload_text"].encode())
+        assert_verifies(row, inner(row)["payload_text"].encode())
     assert len({row["request_signature"]["nonce"] for row in rows}) == 3
     assert len({row["request_signature"]["signature"] for row in rows}) == 3
 

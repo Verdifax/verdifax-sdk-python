@@ -7,11 +7,18 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, Union
 
 import httpx
 
-from ._signing import sign_body
-from ._transport import checked_response
-from ._validation import normalize_payload, validate_hex64, validate_positive_id
-from .exceptions import ValidationError, VerdifaxError
-from .models import AttestedContext, ExecuteRequest, RunsExportCSV, is_provided
+from ._signing import attach_signature
+from ._transport import checked_response, parse_signed_response
+from ._validation import job_block, normalize_payload, validate_hex64, validate_positive_id
+from .exceptions import APIError, ValidationError, VerdifaxError
+from .models import (
+    AttestationReceipt,
+    AttestedContext,
+    ExecuteBatchResponse,
+    ExecuteRequest,
+    RunsExportCSV,
+    is_provided,
+)
 
 if TYPE_CHECKING:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -75,12 +82,35 @@ def refuse_origin_hashes(substance: Optional[Mapping[str, Any]]) -> None:
         )
 
 
-def batch_row(row: BatchRow) -> dict[str, Any]:
-    """Turn one batch row into its JSON body, without checking its values.
+def attest_receipt(response: httpx.Response, request_body: Mapping[str, Any]) -> AttestationReceipt:
+    """Read a ``POST /execute`` response.
 
-    The server reports a bad row in that row's result. A mapping takes the
-    same names as ``attest()``, so a ``payload`` of ``str`` or ``bytes`` is
-    sent the way ``attest()`` sends it.
+    An error carries the signed text too, so a refused run can be checked
+    the same way as a sealed one.
+    """
+    signed_request = request_body.get("signed_request")
+    body = parse_signed_response(response, request_body)
+    if "manifest" not in body:
+        error = APIError(
+            message="API response missing 'manifest'",
+            status_code=response.status_code,
+            response_body=body,
+        )
+        error.signed_request = signed_request
+        raise error
+    return AttestationReceipt.from_api_response(body, signed_request)
+
+
+def batch_row(row: BatchRow) -> dict[str, Any]:
+    """Turn one batch row into its JSON body.
+
+    Only a ``job`` block is checked here. The server reports any other bad
+    value in that row's result. A mapping takes the same names as
+    ``attest()``, so a ``payload`` of ``str`` or ``bytes`` is sent the way
+    ``attest()`` sends it.
+
+    Raises:
+        ValidationError: If the row's ``job`` block is invalid.
     """
     if isinstance(row, ExecuteRequest):
         body = row.model_dump_request()
@@ -102,19 +132,10 @@ def batch_row(row: BatchRow) -> dict[str, Any]:
         body["attested_context"] = attested_block(body["attested_context"])
     if body.get("reproducibility_context") is not None:
         body["reproducibility_context"] = reproducibility_block(body["reproducibility_context"])
+    job = job_block(body.pop("job", None))
+    if job is not None:
+        body["job"] = job
     return body
-
-
-def _signed_row(key: "Optional[Ed25519PrivateKey]", row: dict[str, Any]) -> dict[str, Any]:
-    if key is None:
-        return row
-    fields = {
-        **row,
-        "program_id": row.get("program_id") or "",
-        "route_id": row.get("route_id") or "",
-        "registry_record_hash": row.get("registry_record_hash") or "",
-    }
-    return {**row, "request_signature": sign_body(key, fields)}
 
 
 def batch_body(
@@ -123,7 +144,8 @@ def batch_body(
     """Build ``{"runs": [...]}``, each row signed on its own when there is a key.
 
     Raises:
-        ValidationError: If there are no rows, or more than ``MAX_BATCH_ROWS``.
+        ValidationError: If there are no rows, more than ``MAX_BATCH_ROWS``,
+            or an invalid ``job`` block.
     """
     if len(runs) == 0:
         raise ValidationError("execute_batch needs at least one run")
@@ -131,7 +153,21 @@ def batch_body(
         raise ValidationError(
             f"execute_batch accepts at most {MAX_BATCH_ROWS} runs, got {len(runs)}"
         )
-    return {"runs": [_signed_row(key, batch_row(row)) for row in runs]}
+    return {"runs": [attach_signature(key, batch_row(row)) for row in runs]}
+
+
+def batch_response(
+    parsed: Mapping[str, Any], request_body: Mapping[str, Any]
+) -> ExecuteBatchResponse:
+    """Read a batch response, giving each signed row its exact text.
+
+    ``results`` holds one row for each row sent, in the same order.
+    """
+    results = [
+        {**result, "signed_request": sent.get("signed_request")}
+        for result, sent in zip(parsed.get("results") or [], request_body["runs"])
+    ]
+    return ExecuteBatchResponse.model_validate({**parsed, "results": results})
 
 
 def run_path(run_id: int, suffix: str = "") -> str:
@@ -247,8 +283,10 @@ __all__ = [
     "BatchRow",
     "MAX_BATCH_ROWS",
     "admin_erase_body",
+    "attest_receipt",
     "attested_block",
     "batch_body",
+    "batch_response",
     "batch_row",
     "format_provider_payload",
     "governed_text",

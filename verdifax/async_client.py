@@ -29,14 +29,23 @@ import httpx
 from ._requests import (
     BatchRow,
     admin_erase_body,
+    attest_receipt,
     batch_body,
+    batch_response,
     parse_export_csv,
     provider_attest_args,
     query_params,
     run_path,
 )
 from ._retry import AsyncRetryingClient, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY
-from ._signing import REQUEST_KEY_PATH, attach_signature, load_signing_key, request_key_body
+from ._signing import (
+    REQUEST_KEY_PATH,
+    attach_signature,
+    load_signing_key,
+    request_key_body,
+    request_key_clear_body,
+    request_key_rotation_body,
+)
 from ._transport import checked_response, parse_response, wrap_transport_error
 from ._validation import (
     validate_positive_id,
@@ -51,7 +60,8 @@ from .client import (
     VerdifaxClient,
     env_base_url,
 )
-from .exceptions import APIError, UnsupportedOperationError, ValidationError
+from .exceptions import UnsupportedOperationError, ValidationError
+from .jobs import AsyncJob
 from .models import (
     AttestationReceipt,
     AttestedContext,
@@ -63,7 +73,12 @@ from .models import (
     RunsExportCSV,
     VerifyResponse,
 )
-from .research import DeterminismResult, ReproducibilityContext, determinism_body
+from .research import (
+    DeterminismResult,
+    ReproducibilityContext,
+    determinism_body,
+    determinism_result,
+)
 
 
 class AsyncVerdifaxClient:
@@ -78,9 +93,9 @@ class AsyncVerdifaxClient:
         timeout: Request timeout in seconds. Defaults to 90.
         transport: Optional custom ``httpx.AsyncBaseTransport`` for tests.
         signing_key: Optional 32 raw bytes of an Ed25519 private key. When
-            set, every call to ``POST /execute`` carries a request signature,
-            each row of a batch carries its own, and a determinism check
-            carries one. Needs ``pip install "verdifax[signing]"``. The key is never sent
+            set, every call to ``POST /execute`` is sent as signed text with
+            a request signature, each row of a batch carries its own, and a
+            determinism check carries one. Needs ``pip install "verdifax[signing]"``. The key is never sent
             to the server.
     """
 
@@ -155,6 +170,7 @@ class AsyncVerdifaxClient:
         authorization_chain: Optional[dict[str, Any]] = None,
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
+        job: Optional[Mapping[str, Any]] = None,
     ) -> AttestationReceipt:
         """Async version of :meth:`VerdifaxClient.attest`.
 
@@ -177,20 +193,14 @@ class AsyncVerdifaxClient:
             authorization_chain=authorization_chain,
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
+            job=job,
         )
         request_body = attach_signature(self._signing_key, request_body)
         try:
             response = await self._http.post("/execute", json=request_body)
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc) from exc
-        body = parse_response(response)
-        if "manifest" not in body:
-            raise APIError(
-                message="API response missing 'manifest'",
-                status_code=response.status_code,
-                response_body=body,
-            )
-        return AttestationReceipt.from_api_response(body)
+        return attest_receipt(response, request_body)
 
     async def register_request_key(self) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.register_request_key`."""
@@ -201,13 +211,21 @@ class AsyncVerdifaxClient:
             raise wrap_transport_error(exc) from exc
         return parse_response(response)
 
+    async def rotate_request_key(self, new_signing_key: bytes) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.rotate_request_key`."""
+        new_key = load_signing_key(new_signing_key)
+        body = request_key_rotation_body(self._signing_key, new_key)
+        result = await self._send_json("POST", REQUEST_KEY_PATH, body)
+        self._signing_key = new_key
+        return result
+
     async def clear_request_key(self) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.clear_request_key`."""
-        try:
-            response = await self._http.delete(REQUEST_KEY_PATH)
-        except httpx.HTTPError as exc:
-            raise wrap_transport_error(exc) from exc
-        return parse_response(response)
+        result = await self._send_json(
+            "DELETE", REQUEST_KEY_PATH, request_key_clear_body(self._signing_key)
+        )
+        self._signing_key = None
+        return result
 
     async def verify_run(self, run_id: int) -> VerifyResponse:
         """Async version of :meth:`VerdifaxClient.verify_run`.
@@ -252,6 +270,7 @@ class AsyncVerdifaxClient:
         authorization_chain: Optional[dict[str, Any]] = None,
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
+        job: Optional[Mapping[str, Any]] = None,
     ) -> ExecutionManifest:
         """Async lower-level alternative returning just the manifest."""
         receipt = await self.attest(
@@ -266,6 +285,7 @@ class AsyncVerdifaxClient:
             authorization_chain=authorization_chain,
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
+            job=job,
         )
         return receipt.manifest
 
@@ -315,10 +335,13 @@ class AsyncVerdifaxClient:
         return RunList.model_validate(parse_response(response))
 
     async def export_runs(
-        self, from_: Optional[str] = None, to: Optional[str] = None
+        self,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        job_id: Optional[str] = None,
     ) -> RunsExport:
         """Async version of :meth:`VerdifaxClient.export_runs`."""
-        params = query_params(format="json", **{"from": from_, "to": to})
+        params = query_params(format="json", job_id=job_id, **{"from": from_, "to": to})
         try:
             response = await self._http.get("/runs/export", params=params)
         except httpx.HTTPError as exc:
@@ -326,10 +349,13 @@ class AsyncVerdifaxClient:
         return RunsExport.model_validate(parse_response(response))
 
     async def export_runs_csv(
-        self, from_: Optional[str] = None, to: Optional[str] = None
+        self,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        job_id: Optional[str] = None,
     ) -> RunsExportCSV:
         """Async version of :meth:`VerdifaxClient.export_runs_csv`."""
-        params = query_params(format="csv", **{"from": from_, "to": to})
+        params = query_params(format="csv", job_id=job_id, **{"from": from_, "to": to})
         try:
             response = await self._http.get("/runs/export", params=params)
         except httpx.HTTPError as exc:
@@ -343,7 +369,11 @@ class AsyncVerdifaxClient:
             response = await self._http.post("/execute/batch", json=body)
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc) from exc
-        return ExecuteBatchResponse.model_validate(parse_response(response))
+        return batch_response(parse_response(response), body)
+
+    def job(self, job_id: str) -> AsyncJob:
+        """Async version of :meth:`VerdifaxClient.job`: each step is a coroutine."""
+        return AsyncJob(self, job_id)
 
     async def verify_determinism(
         self,
@@ -383,7 +413,7 @@ class AsyncVerdifaxClient:
             response = await self._http.post("/execute/verify-determinism", json=body)
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc) from exc
-        return DeterminismResult.model_validate(parse_response(response))
+        return determinism_result(response, body)
 
     async def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> httpx.Response:
         try:
@@ -505,6 +535,11 @@ class AsyncVerdifaxClient:
         validate_positive_id(key_id, "key_id")
         await self._send_json("DELETE", f"/admin/keys/{key_id}")
 
+    async def admin_clear_request_key(self, key_id: int) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.admin_clear_request_key`."""
+        validate_positive_id(key_id, "key_id")
+        return await self._send_json("DELETE", f"/admin/keys/{key_id}/request-key")
+
     async def admin_erase(
         self,
         run_id: int,
@@ -527,12 +562,14 @@ class AsyncVerdifaxClient:
         registry_record_hash: str,
         *,
         govern: bool = False,
+        job: Optional[Mapping[str, Any]] = None,
     ) -> AttestationReceipt:
         """Async version of :meth:`VerdifaxClient.attest_claude_response`."""
         return await self.attest(
             program_id=program_id,
             route_id=route_id,
             registry_record_hash=registry_record_hash,
+            job=job,
             **provider_attest_args("anthropic", prompt, response, govern),
         )
 
@@ -545,12 +582,14 @@ class AsyncVerdifaxClient:
         registry_record_hash: str,
         *,
         govern: bool = False,
+        job: Optional[Mapping[str, Any]] = None,
     ) -> AttestationReceipt:
         """Async version of :meth:`VerdifaxClient.attest_openai_response`."""
         return await self.attest(
             program_id=program_id,
             route_id=route_id,
             registry_record_hash=registry_record_hash,
+            job=job,
             **provider_attest_args("openai", prompt, response, govern),
         )
 
