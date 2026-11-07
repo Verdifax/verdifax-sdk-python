@@ -1,0 +1,939 @@
+{
+  "admin_routes": {
+    "DELETE /admin/keys/{id}": {
+      "go": [
+        "AdminRevokeKey"
+      ],
+      "node": [
+        "adminRevokeKey"
+      ],
+      "python": [
+        "admin_revoke_key"
+      ],
+      "python_async": [
+        "admin_revoke_key"
+      ],
+      "r": [
+        "verdifax_admin_revoke_key"
+      ]
+    },
+    "DELETE /admin/keys/{id}/request-key": {
+      "go": [
+        "AdminClearRequestKey"
+      ],
+      "node": [
+        "adminClearRequestKey"
+      ],
+      "python": [
+        "admin_clear_request_key"
+      ],
+      "python_async": [
+        "admin_clear_request_key"
+      ],
+      "r": [
+        "verdifax_admin_clear_request_key"
+      ]
+    },
+    "GET /admin/keys": {
+      "go": [
+        "AdminListKeys"
+      ],
+      "node": [
+        "adminListKeys"
+      ],
+      "python": [
+        "admin_list_keys"
+      ],
+      "python_async": [
+        "admin_list_keys"
+      ],
+      "r": [
+        "verdifax_admin_list_keys"
+      ]
+    },
+    "POST /admin/erase": {
+      "go": [
+        "AdminErase"
+      ],
+      "node": [
+        "adminErase"
+      ],
+      "python": [
+        "admin_erase"
+      ],
+      "python_async": [
+        "admin_erase"
+      ],
+      "r": [
+        "verdifax_admin_erase"
+      ]
+    },
+    "POST /admin/keys": {
+      "go": [
+        "AdminCreateKey"
+      ],
+      "node": [
+        "adminCreateKey"
+      ],
+      "python": [
+        "admin_create_key"
+      ],
+      "python_async": [
+        "admin_create_key"
+      ],
+      "r": [
+        "verdifax_admin_create_key"
+      ]
+    }
+  },
+  "execute_fields": [
+    "payload",
+    "payload_text",
+    "program_id",
+    "route_id",
+    "registry_record_hash",
+    "ai_output_text",
+    "attested_context",
+    "reproducibility_context",
+    "request_substance",
+    "authorization_chain",
+    "regulatory_scaffolding",
+    "causal_graph",
+    "request_signature",
+    "signed_request",
+    "job",
+    "policy_context",
+    "expected_policy_hash"
+  ],
+  "helpers": {
+    "capture_environment": {
+      "go": "CaptureEnvironment",
+      "node": "captureEnvironment",
+      "python": "research.capture_environment",
+      "r": "verdifax_capture_environment"
+    },
+    "client_constructor": {
+      "go": "NewClient",
+      "node": "VerdifaxClient",
+      "python": "VerdifaxClient",
+      "r": "verdifax_client"
+    },
+    "client_from_environment": {
+      "go": "FromEnv",
+      "node": "fromEnv",
+      "python": "from_env",
+      "r": "verdifax_from_env"
+    },
+    "cres_receipt_hash": {
+      "go": "CRESReceiptHash",
+      "node": "cresReceiptHash",
+      "python": "section0.cres_receipt_hash",
+      "r": "verdifax_cres_receipt_hash"
+    },
+    "dcae_closure_hash": {
+      "go": "DCAEClosureHash",
+      "node": "dcaeClosureHash",
+      "python": "section0.dcae_closure_hash",
+      "r": "verdifax_dcae_closure_hash"
+    },
+    "dse_dispatch_hash": {
+      "go": "DSEDispatchHash",
+      "node": "dseDispatchHash",
+      "python": "section0.dse_dispatch_hash",
+      "r": "verdifax_dse_dispatch_hash"
+    },
+    "format_provider_payload": {
+      "go": "FormatProviderPayload",
+      "node": "formatProviderPayload",
+      "python": "format_provider_payload",
+      "r": "verdifax_format_provider_payload"
+    },
+    "generate_request_key": {
+      "go": "GenerateRequestKey",
+      "node": "generateRequestKeyPair",
+      "python": "generate_request_key",
+      "r": "verdifax_generate_request_key"
+    },
+    "job": {
+      "go": "Job",
+      "node": "job",
+      "python": "job",
+      "r": "verdifax_job"
+    },
+    "job_step": {
+      "go": "Step",
+      "node": "step",
+      "python": "step",
+      "r": "verdifax_job_step"
+    },
+    "max_batch_rows": {
+      "go": "MaxBatchRows",
+      "node": "MAX_BATCH_ROWS",
+      "python": "MAX_BATCH_ROWS",
+      "r": "verdifax_max_batch_rows"
+    },
+    "policy_activation_approval": {
+      "go": "PolicyActivationApproval",
+      "node": "policyActivationApproval",
+      "python": "policy_activation_approval",
+      "r": "verdifax_policy_activation_approval"
+    },
+    "policy_activation_preimage": {
+      "go": "PolicyActivationPreimage",
+      "node": "policyActivationPreimage",
+      "python": "policy_activation_preimage",
+      "r": "verdifax_policy_activation_preimage"
+    },
+    "request_key_registration_body": {
+      "go": "RequestKeyRegistrationBody",
+      "node": "requestKeyRegistrationBody",
+      "python": "request_key_registration_body",
+      "r": "verdifax_request_key_registration_body"
+    },
+    "request_signature_preimage": {
+      "go": "RequestSignaturePreimage",
+      "node": "requestSignaturePreimage",
+      "python": "request_signature_preimage",
+      "r": "verdifax_request_signature_preimage"
+    },
+    "rotate_request_key": {
+      "go": "RotateRequestKey",
+      "node": "rotateRequestKey",
+      "python": "rotate_request_key",
+      "r": "verdifax_rotate_request_key"
+    },
+    "run_statuses": {
+      "go": "RunStatuses",
+      "node": "RUN_STATUSES",
+      "python": "RUN_STATUSES",
+      "r": "verdifax_run_statuses"
+    },
+    "sign_request": {
+      "go": "SignRequest",
+      "node": "signRequest",
+      "python": "sign_request",
+      "r": "verdifax_sign_request"
+    },
+    "validate_hex64": {
+      "go": "ValidateHex64",
+      "node": "validateHex64",
+      "python": "validate_hex64",
+      "r": "verdifax_validate_hex64"
+    },
+    "validate_route_id": {
+      "go": "ValidateRouteID",
+      "node": "validateRouteId",
+      "python": "validate_route_id",
+      "r": "verdifax_validate_route_id"
+    }
+  },
+  "notes": {
+    "go_provider_govern": "Go passes the option verdifax.WithGovern(); Node passes govern: true; Python govern=True; R govern = TRUE.",
+    "python_async": "Every python method above also exists on AsyncVerdifaxClient as a coroutine."
+  },
+  "options": {
+    "provider_govern": {
+      "go": "WithGovern",
+      "node": "govern",
+      "python": "govern",
+      "r": "govern"
+    }
+  },
+  "python_only": [
+    "verdifax shadow",
+    "verdifax.attest",
+    "verdifax.verify_run",
+    "verdifax.verify",
+    "VerdifaxClient.verify",
+    "AsyncVerdifaxClient.verify"
+  ],
+  "routes": {
+    "DELETE /keys/request-key": {
+      "go": [
+        "ClearRequestKey"
+      ],
+      "node": [
+        "clearRequestKey"
+      ],
+      "python": [
+        "clear_request_key"
+      ],
+      "python_async": [
+        "clear_request_key"
+      ],
+      "r": [
+        "verdifax_clear_request_key"
+      ]
+    },
+    "GET /attestations": {
+      "go": [
+        "ListAttestations"
+      ],
+      "node": [
+        "listAttestations"
+      ],
+      "python": [
+        "list_attestations"
+      ],
+      "python_async": [
+        "list_attestations"
+      ],
+      "r": [
+        "verdifax_list_attestations"
+      ]
+    },
+    "GET /attestations/{id}": {
+      "go": [
+        "GetAttestation"
+      ],
+      "node": [
+        "getAttestation"
+      ],
+      "python": [
+        "get_attestation"
+      ],
+      "python_async": [
+        "get_attestation"
+      ],
+      "r": [
+        "verdifax_get_attestation"
+      ]
+    },
+    "GET /health": {
+      "go": [
+        "Health"
+      ],
+      "node": [
+        "health"
+      ],
+      "python": [
+        "health"
+      ],
+      "python_async": [
+        "health"
+      ],
+      "r": [
+        "verdifax_health"
+      ]
+    },
+    "GET /openapi.json": {
+      "go": [
+        "GetOpenAPI"
+      ],
+      "node": [
+        "getOpenAPI"
+      ],
+      "python": [
+        "get_openapi"
+      ],
+      "python_async": [
+        "get_openapi"
+      ],
+      "r": [
+        "verdifax_get_openapi"
+      ]
+    },
+    "GET /policies": {
+      "go": [
+        "ListPolicies"
+      ],
+      "node": [
+        "listPolicies"
+      ],
+      "python": [
+        "list_policies"
+      ],
+      "python_async": [
+        "list_policies"
+      ],
+      "r": [
+        "verdifax_list_policies"
+      ]
+    },
+    "GET /policies/history": {
+      "go": [
+        "GetPolicyHistory"
+      ],
+      "node": [
+        "getPolicyHistory"
+      ],
+      "python": [
+        "get_policy_history"
+      ],
+      "python_async": [
+        "get_policy_history"
+      ],
+      "r": [
+        "verdifax_get_policy_history"
+      ]
+    },
+    "GET /policies/{document_hash}": {
+      "go": [
+        "GetPolicy"
+      ],
+      "node": [
+        "getPolicy"
+      ],
+      "python": [
+        "get_policy"
+      ],
+      "python_async": [
+        "get_policy"
+      ],
+      "r": [
+        "verdifax_get_policy"
+      ]
+    },
+    "GET /public/runs/{token}/bundle.json": {
+      "go": [
+        "GetPublicBundleByToken"
+      ],
+      "node": [
+        "getPublicBundleByToken"
+      ],
+      "python": [
+        "get_public_bundle_by_token"
+      ],
+      "python_async": [
+        "get_public_bundle_by_token"
+      ],
+      "r": [
+        "verdifax_get_public_bundle_by_token"
+      ]
+    },
+    "GET /runs": {
+      "go": [
+        "ListRuns"
+      ],
+      "node": [
+        "listRuns"
+      ],
+      "python": [
+        "list_runs"
+      ],
+      "python_async": [
+        "list_runs"
+      ],
+      "r": [
+        "verdifax_list_runs"
+      ]
+    },
+    "GET /runs/export": {
+      "go": [
+        "ExportRuns",
+        "ExportRunsCSV"
+      ],
+      "node": [
+        "exportRuns",
+        "exportRunsCSV"
+      ],
+      "python": [
+        "export_runs",
+        "export_runs_csv"
+      ],
+      "python_async": [
+        "export_runs",
+        "export_runs_csv"
+      ],
+      "r": [
+        "verdifax_export_runs",
+        "verdifax_export_runs_csv"
+      ]
+    },
+    "GET /runs/search": {
+      "go": [
+        "SearchRuns"
+      ],
+      "node": [
+        "searchRuns"
+      ],
+      "python": [
+        "search_runs"
+      ],
+      "python_async": [
+        "search_runs"
+      ],
+      "r": [
+        "verdifax_search_runs"
+      ]
+    },
+    "GET /runs/{id}": {
+      "go": [
+        "GetRun"
+      ],
+      "node": [
+        "getRun"
+      ],
+      "python": [
+        "get_run"
+      ],
+      "python_async": [
+        "get_run"
+      ],
+      "r": [
+        "verdifax_get_run"
+      ]
+    },
+    "GET /runs/{id}/aivp-t4-halt-receipt": {
+      "go": [
+        "GetAivpT4HaltReceipt"
+      ],
+      "node": [
+        "getAivpT4HaltReceipt"
+      ],
+      "python": [
+        "get_aivp_t4_halt_receipt"
+      ],
+      "python_async": [
+        "get_aivp_t4_halt_receipt"
+      ],
+      "r": [
+        "verdifax_get_aivp_t4_halt_receipt"
+      ]
+    },
+    "GET /runs/{id}/allow-token": {
+      "go": [
+        "GetAllowToken"
+      ],
+      "node": [
+        "getAllowToken"
+      ],
+      "python": [
+        "get_allow_token"
+      ],
+      "python_async": [
+        "get_allow_token"
+      ],
+      "r": [
+        "verdifax_get_allow_token"
+      ]
+    },
+    "GET /runs/{id}/artifacts": {
+      "go": [
+        "GetRunArtifacts"
+      ],
+      "node": [
+        "getRunArtifacts"
+      ],
+      "python": [
+        "get_run_artifacts"
+      ],
+      "python_async": [
+        "get_run_artifacts"
+      ],
+      "r": [
+        "verdifax_get_run_artifacts"
+      ]
+    },
+    "GET /runs/{id}/attestation-gap-receipt": {
+      "go": [
+        "GetAttestationGapReceipt"
+      ],
+      "node": [
+        "getAttestationGapReceipt"
+      ],
+      "python": [
+        "get_attestation_gap_receipt"
+      ],
+      "python_async": [
+        "get_attestation_gap_receipt"
+      ],
+      "r": [
+        "verdifax_get_attestation_gap_receipt"
+      ]
+    },
+    "GET /runs/{id}/bundle.json": {
+      "go": [
+        "GetPublicBundle"
+      ],
+      "node": [
+        "getPublicBundle"
+      ],
+      "python": [
+        "get_public_bundle"
+      ],
+      "python_async": [
+        "get_public_bundle"
+      ],
+      "r": [
+        "verdifax_get_public_bundle"
+      ]
+    },
+    "GET /runs/{id}/ccv-halt-receipt": {
+      "go": [
+        "GetCCVHaltReceipt"
+      ],
+      "node": [
+        "getCCVHaltReceipt"
+      ],
+      "python": [
+        "get_ccv_halt_receipt"
+      ],
+      "python_async": [
+        "get_ccv_halt_receipt"
+      ],
+      "r": [
+        "verdifax_get_ccv_halt_receipt"
+      ]
+    },
+    "GET /runs/{id}/ces-audit-record": {
+      "go": [
+        "GetCESAuditRecord"
+      ],
+      "node": [
+        "getCESAuditRecord"
+      ],
+      "python": [
+        "get_ces_audit_record"
+      ],
+      "python_async": [
+        "get_ces_audit_record"
+      ],
+      "r": [
+        "verdifax_get_ces_audit_record"
+      ]
+    },
+    "GET /runs/{id}/deletion-receipts": {
+      "go": [
+        "ListDeletionReceipts"
+      ],
+      "node": [
+        "listDeletionReceipts"
+      ],
+      "python": [
+        "list_deletion_receipts"
+      ],
+      "python_async": [
+        "list_deletion_receipts"
+      ],
+      "r": [
+        "verdifax_list_deletion_receipts"
+      ]
+    },
+    "GET /runs/{id}/deny-receipt": {
+      "go": [
+        "GetDenyReceipt"
+      ],
+      "node": [
+        "getDenyReceipt"
+      ],
+      "python": [
+        "get_deny_receipt"
+      ],
+      "python_async": [
+        "get_deny_receipt"
+      ],
+      "r": [
+        "verdifax_get_deny_receipt"
+      ]
+    },
+    "GET /runs/{id}/macc-halt-receipt": {
+      "go": [
+        "GetMACCHaltReceipt"
+      ],
+      "node": [
+        "getMACCHaltReceipt"
+      ],
+      "python": [
+        "get_macc_halt_receipt"
+      ],
+      "python_async": [
+        "get_macc_halt_receipt"
+      ],
+      "r": [
+        "verdifax_get_macc_halt_receipt"
+      ]
+    },
+    "GET /runs/{id}/report": {
+      "go": [
+        "GetRunReport"
+      ],
+      "node": [
+        "getRunReport"
+      ],
+      "python": [
+        "get_run_report"
+      ],
+      "python_async": [
+        "get_run_report"
+      ],
+      "r": [
+        "verdifax_get_run_report"
+      ]
+    },
+    "GET /runs/{id}/report.pdf": {
+      "go": [
+        "DownloadAuditPDF"
+      ],
+      "node": [
+        "downloadAuditPDF"
+      ],
+      "python": [
+        "download_audit_pdf"
+      ],
+      "python_async": [
+        "download_audit_pdf"
+      ],
+      "r": [
+        "verdifax_download_audit_pdf"
+      ]
+    },
+    "GET /runs/{id}/verify": {
+      "go": [
+        "VerifyRun"
+      ],
+      "node": [
+        "verifyRun"
+      ],
+      "python": [
+        "verify_run"
+      ],
+      "python_async": [
+        "verify_run"
+      ],
+      "r": [
+        "verdifax_verify_run"
+      ]
+    },
+    "GET /stats": {
+      "go": [
+        "GetStats"
+      ],
+      "node": [
+        "getStats"
+      ],
+      "python": [
+        "get_stats"
+      ],
+      "python_async": [
+        "get_stats"
+      ],
+      "r": [
+        "verdifax_get_stats"
+      ]
+    },
+    "GET /version": {
+      "go": [
+        "Version"
+      ],
+      "node": [
+        "version"
+      ],
+      "python": [
+        "version"
+      ],
+      "python_async": [
+        "version"
+      ],
+      "r": [
+        "verdifax_version"
+      ]
+    },
+    "POST /dcae/verify": {
+      "go": [
+        "DCAEVerify"
+      ],
+      "node": [
+        "dcaeVerify"
+      ],
+      "python": [
+        "dcae_verify"
+      ],
+      "python_async": [
+        "dcae_verify"
+      ],
+      "r": [
+        "verdifax_dcae_verify"
+      ]
+    },
+    "POST /execute": {
+      "go": [
+        "Execute",
+        "Attest",
+        "AttestClaudeResponse",
+        "AttestOpenAIResponse"
+      ],
+      "node": [
+        "execute",
+        "attest",
+        "attestClaudeResponse",
+        "attestOpenAIResponse"
+      ],
+      "python": [
+        "execute",
+        "attest",
+        "attest_claude_response",
+        "attest_openai_response"
+      ],
+      "python_async": [
+        "execute",
+        "attest",
+        "attest_claude_response",
+        "attest_openai_response"
+      ],
+      "r": [
+        "verdifax_execute",
+        "verdifax_attest",
+        "verdifax_attest_claude_response",
+        "verdifax_attest_openai_response"
+      ]
+    },
+    "POST /execute/batch": {
+      "go": [
+        "ExecuteBatch"
+      ],
+      "node": [
+        "executeBatch"
+      ],
+      "python": [
+        "execute_batch"
+      ],
+      "python_async": [
+        "execute_batch"
+      ],
+      "r": [
+        "verdifax_execute_batch"
+      ]
+    },
+    "POST /execute/verify-determinism": {
+      "go": [
+        "VerifyDeterminism"
+      ],
+      "node": [
+        "verifyDeterminism"
+      ],
+      "python": [
+        "verify_determinism"
+      ],
+      "python_async": [
+        "verify_determinism"
+      ],
+      "r": [
+        "verdifax_verify_determinism"
+      ]
+    },
+    "POST /keys/request-key": {
+      "go": [
+        "RegisterRequestKey"
+      ],
+      "node": [
+        "registerRequestKey"
+      ],
+      "python": [
+        "register_request_key"
+      ],
+      "python_async": [
+        "register_request_key"
+      ],
+      "r": [
+        "verdifax_register_request_key"
+      ]
+    },
+    "POST /policies": {
+      "go": [
+        "UploadPolicy"
+      ],
+      "node": [
+        "uploadPolicy"
+      ],
+      "python": [
+        "upload_policy"
+      ],
+      "python_async": [
+        "upload_policy"
+      ],
+      "r": [
+        "verdifax_upload_policy"
+      ]
+    },
+    "POST /policies/test": {
+      "go": [
+        "TestPolicy"
+      ],
+      "node": [
+        "testPolicy"
+      ],
+      "python": [
+        "test_policy"
+      ],
+      "python_async": [
+        "test_policy"
+      ],
+      "r": [
+        "verdifax_test_policy"
+      ]
+    },
+    "POST /policies/{document_hash}/activate": {
+      "go": [
+        "ActivatePolicy"
+      ],
+      "node": [
+        "activatePolicy"
+      ],
+      "python": [
+        "activate_policy"
+      ],
+      "python_async": [
+        "activate_policy"
+      ],
+      "r": [
+        "verdifax_activate_policy"
+      ]
+    }
+  },
+  "settings": {
+    "api_key": {
+      "env": [
+        "VERDIFAX_API_KEY"
+      ],
+      "go": "APIKey",
+      "node": "apiKey",
+      "python": "api_key",
+      "r": "api_key"
+    },
+    "base_url": {
+      "env": [
+        "VERDIFAX_BASE_URL",
+        "VERDIFAX_API_URL"
+      ],
+      "go": "BaseURL",
+      "node": "baseURL",
+      "python": "base_url",
+      "r": "base_url"
+    },
+    "max_retries": {
+      "env": [
+        "VERDIFAX_MAX_RETRIES"
+      ],
+      "go": "MaxRetries",
+      "node": "maxRetries",
+      "python": "max_retries",
+      "r": "max_retries"
+    },
+    "retry_base_delay": {
+      "env": [],
+      "go": "RetryBaseDelay",
+      "node": "retryBaseDelayMs",
+      "python": "retry_base_delay",
+      "r": "retry_base_delay"
+    },
+    "timeout": {
+      "env": [
+        "VERDIFAX_TIMEOUT_MS"
+      ],
+      "go": "Timeout",
+      "node": "timeoutMs",
+      "python": "timeout",
+      "r": "timeout"
+    },
+    "user_agent": {
+      "env": [
+        "VERDIFAX_USER_AGENT"
+      ],
+      "go": "UserAgent",
+      "node": "userAgent",
+      "python": "user_agent",
+      "r": "user_agent"
+    }
+  }
+}

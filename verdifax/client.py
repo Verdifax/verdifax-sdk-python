@@ -23,12 +23,20 @@ from urllib.parse import quote
 import httpx
 
 from ._requests import (
+    POLICIES_PATH,
     BatchRow,
+    activation_record,
     admin_erase_body,
+    apply_policy_fields,
     attest_receipt,
     batch_body,
     batch_response,
     parse_export_csv,
+    policy_activation_body,
+    policy_history,
+    policy_path,
+    policy_test_body,
+    policy_upload_body,
     provider_attest_args,
     query_params,
     refuse_origin_hashes,
@@ -124,8 +132,10 @@ class VerdifaxClient:
         signing_key: Optional 32 raw bytes of an Ed25519 private key. When
             set, every call to ``POST /execute`` is sent as signed text with
             a request signature, each row of a batch carries its own, and a
-            determinism check carries one. Needs ``pip install "verdifax[signing]"``. The key is never sent
-            to the server.
+            determinism check carries one. ``activate_policy`` sends the
+            key's approval of the change. Needs
+            ``pip install "verdifax[signing]"``. The key is never sent to the
+            server.
     """
 
     def __init__(
@@ -200,6 +210,8 @@ class VerdifaxClient:
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
         job: Optional[Mapping[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> AttestationReceipt:
         """Run the nine-stage pipeline against ``payload`` and return a receipt.
 
@@ -241,6 +253,17 @@ class VerdifaxClient:
                 ``{"job_id", "step_id", "previous_record_hashes",
                 "external_previous", "final"}``. The two lists are sorted
                 and repeats removed for you. :meth:`job` builds this block.
+            policy_context: Optional facts for the active policy's rules:
+                ``actor_type``, ``mfa_satisfied``, ``session_age_seconds``,
+                ``object_type``, ``object_id`` and ``classification``. An
+                unknown key or a value the server refuses raises here.
+                ``actor_type``, ``mfa_satisfied`` and ``session_age_seconds``
+                describe the attested actor, so they need an
+                ``attested_context`` that names one. A rule on these judges
+                what was declared. It cannot show the declared facts are true.
+            expected_policy_hash: Optional ``policy_hash`` of the policy this
+                run must be decided under. When another policy is active the
+                server refuses the run with 409.
 
         ``request_substance``, ``authorization_chain``,
         ``regulatory_scaffolding`` and ``causal_graph`` are recorded as
@@ -273,6 +296,8 @@ class VerdifaxClient:
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
             job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
         )
         request_body = attach_signature(self._signing_key, request_body)
         try:
@@ -421,6 +446,8 @@ class VerdifaxClient:
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
         job: Optional[Mapping[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> ExecutionManifest:
         """Lower-level alternative to :meth:`attest` that returns just the manifest.
 
@@ -440,6 +467,8 @@ class VerdifaxClient:
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
             job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
         ).manifest
 
     def get_run(self, run_id: int) -> Run:
@@ -558,16 +587,20 @@ class VerdifaxClient:
 
         Each row is an :class:`ExecuteRequest`, or a mapping with the same
         names as :meth:`attest`. With a ``signing_key`` each row carries its
-        own signature and nonce. Only a row's ``job`` block is checked here:
-        the server reports any other bad value in that row's result, and a
-        failed row does not raise.
+        own signature and nonce. Only a row's field names, its
+        ``attested_context`` names, ``job`` block, ``policy_context`` and
+        ``expected_policy_hash`` are checked here: the server reports any
+        other bad value in that row's result, and a failed row does not
+        raise.
 
         This is one POST and it is never retried. After a timeout the server
         may have run some or all of the rows.
 
         Raises:
-            ValidationError: If there are no rows, more than 1,000, or an
-                invalid ``job`` block.
+            ValidationError: If there are no rows, more than 1,000, a field
+                the server does not read, or an invalid ``attested_context``,
+                ``job`` block, ``policy_context`` or ``expected_policy_hash``.
+                Nothing is sent.
             APIError: For a non-2xx response.
             ConnectionError: If the API was unreachable.
         """
@@ -600,6 +633,8 @@ class VerdifaxClient:
         authorization_chain: Optional[dict[str, Any]] = None,
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> DeterminismResult:
         """Same as :func:`verdifax.research.verify_determinism` with this client."""
         return verify_determinism(
@@ -615,6 +650,8 @@ class VerdifaxClient:
             authorization_chain=authorization_chain,
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
         )
 
     def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> httpx.Response:
@@ -720,6 +757,119 @@ class VerdifaxClient:
         """Submit a proof bundle to ``POST /dcae/verify``. No API key needed."""
         return self._send_json("POST", "/dcae/verify", dict(bundle))
 
+    # ── policies ───────────────────────────────────────────────────────────
+    def upload_policy(self, document: str) -> dict[str, Any]:
+        """Store a policy document with ``POST /policies``. It changes nothing yet.
+
+        Args:
+            document: The policy's exact text. The server hashes these exact
+                bytes as ``document_hash``, so the text is sent unchanged.
+
+        Returns:
+            The server's object: ``policy_id``, ``policy_version``,
+            ``policy_hash``, ``document_hash`` and ``created_at``.
+
+        Raises:
+            ValidationError: If ``document`` is not a ``str``. A dict or list
+                is refused, because serializing it would change the hash.
+            APIError: For a non-2xx response, for example 400 for a field the
+                server refuses.
+            ConnectionError: If the API was unreachable.
+        """
+        return self._send_json("POST", POLICIES_PATH, policy_upload_body(document))
+
+    def list_policies(self) -> dict[str, Any]:
+        """List this key's policy documents with ``GET /policies``.
+
+        Returns:
+            The server's object: ``ok``, ``chain_id``,
+            ``newest_activation_hash`` (64 zeros before the first change),
+            ``active_document_hash`` (empty under the built-in policy) and
+            ``policies``.
+        """
+        return self._get_json(POLICIES_PATH)
+
+    def get_policy(self, document_hash: str) -> dict[str, Any]:
+        """Read one stored document with ``GET /policies/{document_hash}``.
+
+        Returns:
+            The upload object plus ``document``, the exact text.
+
+        Raises:
+            ValidationError: If ``document_hash`` is not 64 lowercase hex
+                characters.
+            APIError: For a non-2xx response, for example 404.
+            ConnectionError: If the API was unreachable.
+        """
+        return self._get_json(policy_path(document_hash))
+
+    def test_policy(
+        self,
+        inputs: Mapping[str, Any],
+        document: Optional[str] = None,
+        document_hash: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Show which rule would fire on sample inputs, with ``POST /policies/test``.
+
+        Pass exactly one of ``document`` (exact text) and ``document_hash``
+        (a stored document). It seals nothing.
+
+        Returns:
+            The server's object: ``ok``, ``sealed`` (always ``False``),
+            ``outcome``, ``fired_rule_id`` and ``reason_code``.
+
+        Raises:
+            ValidationError: If both or neither of ``document`` and
+                ``document_hash`` are given, or one of them is malformed.
+            APIError: For a non-2xx response.
+            ConnectionError: If the API was unreachable.
+        """
+        body = policy_test_body(inputs, document, document_hash)
+        return self._send_json("POST", f"{POLICIES_PATH}/test", body)
+
+    def get_policy_history(self) -> list[dict[str, Any]]:
+        """The chain of this key's policy changes, oldest first.
+
+        Calls ``GET /policies/history`` and returns the list as the server
+        sent it. Save it with ``json.dump`` to a file and check it with
+        ``verdifax-verify --policy-history FILE``.
+
+        Raises:
+            VerdifaxError: If the server did not send a list.
+            APIError: For a non-2xx response.
+            ConnectionError: If the API was unreachable.
+        """
+        return policy_history(parse_response(self._get(f"{POLICIES_PATH}/history")))
+
+    def activate_policy(self, document_hash: str) -> dict[str, Any]:
+        """Make a stored document the policy in force.
+
+        Reads ``GET /policies`` for the chain and its newest change, then
+        sends ``POST /policies/{document_hash}/activate`` naming that change.
+        With a ``signing_key`` the request key approves the change, which the
+        server requires once a request key is registered.
+
+        Rolling back is activating an earlier document. It is one more change
+        in the chain, so the change it undoes stays on the record.
+
+        Returns:
+            The ``activation`` object: the change record.
+
+        Raises:
+            ValidationError: If ``document_hash`` is not 64 lowercase hex
+                characters.
+            APIError: For a non-2xx response. A 409 means the chain moved
+                (someone else changed it first), the document is not yet
+                effective, or similar. It is not retried: read the policies
+                again before deciding to repeat the change.
+            VerdifaxError: If ``GET /policies`` gave no newest change, or no
+                ``chain_id`` for a signing client.
+            ConnectionError: If the API was unreachable.
+        """
+        path = policy_path(document_hash, "/activate")
+        body = policy_activation_body(self._signing_key, self.list_policies(), document_hash)
+        return activation_record(self._send_json("POST", path, body))
+
     def admin_create_key(self, name: str) -> dict[str, Any]:
         """Create an API key. The response holds its secret once."""
         if not name:
@@ -765,6 +915,8 @@ class VerdifaxClient:
         *,
         govern: bool = False,
         job: Optional[Mapping[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> AttestationReceipt:
         """Same as :func:`verdifax.attest_claude_response` with this client."""
         return self.attest(
@@ -772,6 +924,8 @@ class VerdifaxClient:
             route_id=route_id,
             registry_record_hash=registry_record_hash,
             job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
             **provider_attest_args("anthropic", prompt, response, govern),
         )
 
@@ -785,6 +939,8 @@ class VerdifaxClient:
         *,
         govern: bool = False,
         job: Optional[Mapping[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> AttestationReceipt:
         """Same as :func:`verdifax.attest_openai_response` with this client."""
         return self.attest(
@@ -792,6 +948,8 @@ class VerdifaxClient:
             route_id=route_id,
             registry_record_hash=registry_record_hash,
             job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
             **provider_attest_args("openai", prompt, response, govern),
         )
 
@@ -810,6 +968,8 @@ class VerdifaxClient:
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
         job: Optional[Mapping[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> dict[str, Any]:
         validate_hex64(program_id, "program_id")
         validate_hex64(registry_record_hash, "registry_record_hash")
@@ -840,7 +1000,10 @@ class VerdifaxClient:
             causal_graph=causal_graph,
             job=job_block(job),
         )
-        return request.model_dump_request()
+        body = request.model_dump_request()
+        body["policy_context"] = policy_context
+        body["expected_policy_hash"] = expected_policy_hash
+        return apply_policy_fields(body)
 
 
 __all__ = [

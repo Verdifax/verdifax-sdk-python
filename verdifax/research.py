@@ -66,13 +66,18 @@ import sys
 from typing import Any, Dict, List, Mapping, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ._requests import attested_block, refuse_origin_hashes, reproducibility_block
+from ._requests import (
+    apply_policy_fields,
+    attested_block,
+    refuse_origin_hashes,
+    reproducibility_block,
+)
 from ._signing import attach_signature
 from ._transport import parse_signed_response, wrap_transport_error
 from ._validation import normalize_payload, validate_hex64, validate_route_id
-from .models import AttestedContext
+from .models import AttestedContext, refuse_unknown_fields
 
 # ── ReproducibilityContext model ────────────────────────────────────────────
 
@@ -91,7 +96,13 @@ class ReproducibilityContext(BaseModel):
     contract (``internal/artifacts/category6_reproducibility.go``).
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    # A request model refuses an unknown field, so a typo cannot be dropped.
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_unknown(cls, data: Any) -> Any:
+        return refuse_unknown_fields(cls, data)
 
     declared: bool = Field(
         default=False,
@@ -399,6 +410,8 @@ def determinism_body(
     authorization_chain: Optional[Dict[str, Any]] = None,
     regulatory_scaffolding: Optional[Dict[str, Any]] = None,
     causal_graph: Optional[Dict[str, Any]] = None,
+    policy_context: Optional[Mapping[str, Any]] = None,
+    expected_policy_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Validate the inputs and build the body of ``POST /execute/verify-determinism``."""
     validate_hex64(program_id, "program_id")
@@ -429,7 +442,9 @@ def determinism_body(
         "causal_graph": causal_graph,
     }
     body.update({name: block for name, block in blocks.items() if block is not None})
-    return body
+    body["policy_context"] = policy_context
+    body["expected_policy_hash"] = expected_policy_hash
+    return apply_policy_fields(body)
 
 
 def determinism_result(response: httpx.Response, request_body: Dict[str, Any]) -> DeterminismResult:
@@ -453,6 +468,8 @@ def verify_determinism(
     authorization_chain: Optional[Dict[str, Any]] = None,
     regulatory_scaffolding: Optional[Dict[str, Any]] = None,
     causal_graph: Optional[Dict[str, Any]] = None,
+    policy_context: Optional[Mapping[str, Any]] = None,
+    expected_policy_hash: Optional[str] = None,
 ) -> DeterminismResult:
     """Run the same payload through the pipeline twice and report the comparison.
 
@@ -486,6 +503,8 @@ def verify_determinism(
         request_substance, authorization_chain, regulatory_scaffolding,
             causal_graph: Optional caller-supplied blocks (mirror the same
             parameters on ``attest``).
+        policy_context, expected_policy_hash: Optional, checked and sent
+            as on ``attest``. Both runs are decided under the same policy.
 
     Returns:
         A :class:`DeterminismResult` with the comparison summary.
@@ -506,6 +525,8 @@ def verify_determinism(
         authorization_chain=authorization_chain,
         regulatory_scaffolding=regulatory_scaffolding,
         causal_graph=causal_graph,
+        policy_context=policy_context,
+        expected_policy_hash=expected_policy_hash,
     )
     body = attach_signature(client._signing_key, body)
     try:

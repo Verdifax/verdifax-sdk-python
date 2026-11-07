@@ -27,12 +27,19 @@ from urllib.parse import quote
 import httpx
 
 from ._requests import (
+    POLICIES_PATH,
     BatchRow,
+    activation_record,
     admin_erase_body,
     attest_receipt,
     batch_body,
     batch_response,
     parse_export_csv,
+    policy_activation_body,
+    policy_history,
+    policy_path,
+    policy_test_body,
+    policy_upload_body,
     provider_attest_args,
     query_params,
     run_path,
@@ -95,8 +102,10 @@ class AsyncVerdifaxClient:
         signing_key: Optional 32 raw bytes of an Ed25519 private key. When
             set, every call to ``POST /execute`` is sent as signed text with
             a request signature, each row of a batch carries its own, and a
-            determinism check carries one. Needs ``pip install "verdifax[signing]"``. The key is never sent
-            to the server.
+            determinism check carries one. ``activate_policy`` sends the
+            key's approval of the change. Needs
+            ``pip install "verdifax[signing]"``. The key is never sent to the
+            server.
     """
 
     def __init__(
@@ -171,6 +180,8 @@ class AsyncVerdifaxClient:
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
         job: Optional[Mapping[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> AttestationReceipt:
         """Async version of :meth:`VerdifaxClient.attest`.
 
@@ -194,6 +205,8 @@ class AsyncVerdifaxClient:
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
             job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
         )
         request_body = attach_signature(self._signing_key, request_body)
         try:
@@ -271,6 +284,8 @@ class AsyncVerdifaxClient:
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
         job: Optional[Mapping[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> ExecutionManifest:
         """Async lower-level alternative returning just the manifest."""
         receipt = await self.attest(
@@ -286,6 +301,8 @@ class AsyncVerdifaxClient:
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
             job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
         )
         return receipt.manifest
 
@@ -389,6 +406,8 @@ class AsyncVerdifaxClient:
         authorization_chain: Optional[dict[str, Any]] = None,
         regulatory_scaffolding: Optional[dict[str, Any]] = None,
         causal_graph: Optional[dict[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> DeterminismResult:
         """Async version of :func:`verdifax.research.verify_determinism`.
 
@@ -407,6 +426,8 @@ class AsyncVerdifaxClient:
             authorization_chain=authorization_chain,
             regulatory_scaffolding=regulatory_scaffolding,
             causal_graph=causal_graph,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
         )
         body = attach_signature(self._signing_key, body)
         try:
@@ -518,6 +539,48 @@ class AsyncVerdifaxClient:
         """Async version of :meth:`VerdifaxClient.dcae_verify`."""
         return await self._send_json("POST", "/dcae/verify", dict(bundle))
 
+    # ── policies ───────────────────────────────────────────────────────────
+    async def upload_policy(self, document: str) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.upload_policy`."""
+        return await self._send_json("POST", POLICIES_PATH, policy_upload_body(document))
+
+    async def list_policies(self) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.list_policies`."""
+        return await self._get_json(POLICIES_PATH)
+
+    async def get_policy(self, document_hash: str) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.get_policy`."""
+        return await self._get_json(policy_path(document_hash))
+
+    async def test_policy(
+        self,
+        inputs: Mapping[str, Any],
+        document: Optional[str] = None,
+        document_hash: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.test_policy`. It seals nothing."""
+        body = policy_test_body(inputs, document, document_hash)
+        return await self._send_json("POST", f"{POLICIES_PATH}/test", body)
+
+    async def get_policy_history(self) -> list[dict[str, Any]]:
+        """Async version of :meth:`VerdifaxClient.get_policy_history`.
+
+        Save the list with ``json.dump`` to a file and check it with
+        ``verdifax-verify --policy-history FILE``.
+        """
+        return policy_history(parse_response(await self._get(f"{POLICIES_PATH}/history")))
+
+    async def activate_policy(self, document_hash: str) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.activate_policy`.
+
+        Rolling back is activating an earlier document. A 409 raises
+        :class:`APIError` and is not retried.
+        """
+        path = policy_path(document_hash, "/activate")
+        listing = await self.list_policies()
+        body = policy_activation_body(self._signing_key, listing, document_hash)
+        return activation_record(await self._send_json("POST", path, body))
+
     async def admin_create_key(self, name: str) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.admin_create_key`."""
         if not name:
@@ -563,6 +626,8 @@ class AsyncVerdifaxClient:
         *,
         govern: bool = False,
         job: Optional[Mapping[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> AttestationReceipt:
         """Async version of :meth:`VerdifaxClient.attest_claude_response`."""
         return await self.attest(
@@ -570,6 +635,8 @@ class AsyncVerdifaxClient:
             route_id=route_id,
             registry_record_hash=registry_record_hash,
             job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
             **provider_attest_args("anthropic", prompt, response, govern),
         )
 
@@ -583,6 +650,8 @@ class AsyncVerdifaxClient:
         *,
         govern: bool = False,
         job: Optional[Mapping[str, Any]] = None,
+        policy_context: Optional[Mapping[str, Any]] = None,
+        expected_policy_hash: Optional[str] = None,
     ) -> AttestationReceipt:
         """Async version of :meth:`VerdifaxClient.attest_openai_response`."""
         return await self.attest(
@@ -590,6 +659,8 @@ class AsyncVerdifaxClient:
             route_id=route_id,
             registry_record_hash=registry_record_hash,
             job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
             **provider_attest_args("openai", prompt, response, govern),
         )
 

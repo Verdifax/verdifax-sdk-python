@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Mapping, Optional
 
-from ._validation import job_block
+from ._validation import job_block, validate_hex64
 from .exceptions import ValidationError, VerdifaxError
 
 if TYPE_CHECKING:
@@ -33,6 +33,7 @@ _REQUEST_SIGNATURE_VERSION = "2"
 _JOB_FORM = "verdifax.job.v1"
 _REQUEST_KEY_PROOF_FORM = "verdifax.request-key.v1"
 _REQUEST_KEY_CHANGE_FORM = "verdifax.request-key-change.v1"
+_POLICY_ACTIVATION_FORM = "verdifax.policy-activation.v1"
 _SIGNING_KEY_BYTES = 32
 
 
@@ -173,6 +174,38 @@ def request_key_change_preimage(new_public_key: str, signed_at: str, nonce: str)
     """
     fields = (_REQUEST_KEY_CHANGE_FORM, new_public_key, signed_at, nonce)
     return "\x00".join(fields).encode("utf-8")
+
+
+def policy_activation_preimage(
+    chain_id: str,
+    document_hash: str,
+    previous_activation_hash: str,
+    signed_at: str,
+    nonce: str,
+) -> bytes:
+    """The bytes a request key signs to approve a policy activation.
+
+    ``chain_id`` comes from ``GET /policies``, as does
+    ``previous_activation_hash``, the newest change in that chain (64 zeros
+    before the first). Matches the orchestrator's ``PolicyActivationPreimage``.
+
+    Raises:
+        ValidationError: If a value is not text or holds a zero byte, which
+            would make the joined bytes ambiguous.
+    """
+    fields = (
+        ("chain_id", chain_id),
+        ("document_hash", document_hash),
+        ("previous_activation_hash", previous_activation_hash),
+        ("signed_at", signed_at),
+        ("nonce", nonce),
+    )
+    for name, value in fields:
+        _utf8(value, name)
+        if "\x00" in value:
+            raise ValidationError(f"{name} cannot be signed: it holds a zero byte")
+    values = (_POLICY_ACTIVATION_FORM, *(value for _, value in fields))
+    return "\x00".join(values).encode("utf-8")
 
 
 def _signing_time() -> str:
@@ -325,6 +358,60 @@ def request_key_change(
     }
 
 
+def policy_activation_signature(
+    key: "Ed25519PrivateKey",
+    chain_id: str,
+    document_hash: str,
+    previous_activation_hash: str,
+    signed_at: Optional[str] = None,
+    nonce: Optional[str] = None,
+) -> dict[str, str]:
+    """The ``signature`` block of an activation, signed by ``key``."""
+    validate_hex64(document_hash, "document_hash")
+    validate_hex64(previous_activation_hash, "previous_activation_hash")
+    signed_at = _signing_time() if signed_at is None else signed_at
+    nonce = _signing_nonce() if nonce is None else nonce
+    preimage = policy_activation_preimage(
+        chain_id, document_hash, previous_activation_hash, signed_at, nonce
+    )
+    return {
+        "signature": base64.b64encode(key.sign(preimage)).decode("ascii"),
+        "signed_at": signed_at,
+        "nonce": nonce,
+    }
+
+
+def policy_activation_approval(
+    signing_key: bytes,
+    chain_id: str,
+    document_hash: str,
+    previous_activation_hash: str,
+    signed_at: Optional[str] = None,
+    nonce: Optional[str] = None,
+) -> dict[str, str]:
+    """Build the ``signature`` block of ``POST /policies/{document_hash}/activate``.
+
+    The request key approves making ``document_hash`` the policy in force,
+    after ``previous_activation_hash`` in the chain ``chain_id``. Both come
+    from ``GET /policies``. A client with a ``signing_key`` does this itself
+    in ``activate_policy``. ``signed_at`` and ``nonce`` default to the current
+    time and fresh random bytes. A nonce the server has already seen is
+    refused.
+
+    Raises:
+        ValidationError: If the key is not 32 raw bytes, or a hash is not 64
+            lowercase hex characters.
+    """
+    return policy_activation_signature(
+        load_signing_key(signing_key),
+        chain_id,
+        document_hash,
+        previous_activation_hash,
+        signed_at,
+        nonce,
+    )
+
+
 def request_key_rotation_body(
     current: "Optional[Ed25519PrivateKey]", new: "Ed25519PrivateKey"
 ) -> dict[str, Any]:
@@ -353,6 +440,9 @@ __all__ = [
     "generate_request_key",
     "load_signing_key",
     "payload_hash",
+    "policy_activation_approval",
+    "policy_activation_preimage",
+    "policy_activation_signature",
     "request_key_body",
     "request_key_change",
     "request_key_change_preimage",

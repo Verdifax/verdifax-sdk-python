@@ -121,13 +121,19 @@ asyncio.run(main())
 | `register_request_key()` | `POST /keys/request-key` | required |
 | `rotate_request_key(new_signing_key)` | `POST /keys/request-key` | required |
 | `clear_request_key()` | `DELETE /keys/request-key` | required |
+| `upload_policy(document)` | `POST /policies` | required |
+| `list_policies()` | `GET /policies` | required |
+| `get_policy(document_hash)` | `GET /policies/{document_hash}` | required |
+| `test_policy(inputs, document=None, document_hash=None)` | `POST /policies/test` | required |
+| `get_policy_history()` | `GET /policies/history` | required |
+| `activate_policy(document_hash)` | `GET /policies`, then `POST /policies/{document_hash}/activate` | required |
 | `admin_create_key(name)` | `POST /admin/keys` | admin |
 | `admin_list_keys()` | `GET /admin/keys` | admin |
 | `admin_revoke_key(key_id)` | `DELETE /admin/keys/{id}` | admin |
 | `admin_clear_request_key(key_id)` | `DELETE /admin/keys/{id}/request-key` | admin |
 | `admin_erase(...)` | `POST /admin/erase` | admin |
 
-These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
+These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `policy_activation_preimage`, `policy_activation_approval`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
 
 `get_run_artifacts`, `get_public_bundle` and `get_public_bundle_by_token` return the exact JSON text the server sent, so you can save it and check it with `verdifax-verify`.
 
@@ -145,7 +151,7 @@ for row in batch.results:
     print(row.index, row.ok, row.run_id, row.error)
 ```
 
-A row can carry a `job` block, which is checked before sending. With a signing key each result row has its own `signed_request`, and every row that sealed a record has its `record_hash`.
+A row given as a mapping raises `ValidationError` for a key the server does not read, before anything is sent, because the server would drop a misspelt field with no error. A row can carry a `job` block, which is checked before sending. With a signing key each result row has its own `signed_request`, and every row that sealed a record has its `record_hash`.
 
 The client's `timeout` covers the whole batch, so raise it for a large one. A batch is one POST and it is never retried. After a timeout the server may have run some or all of the rows, so list your runs before you send them again.
 
@@ -241,7 +247,7 @@ client = VerdifaxClient(signing_key=private_key)
 client.register_request_key()  # sends the public key with its proof
 
 # attest, execute, the provider helpers, execute_batch and verify_determinism
-# now sign.
+# now sign, and activate_policy signs each policy change.
 receipt = client.attest(
     payload="first signed attestation",
     program_id="a" * 64,
@@ -275,9 +281,90 @@ A signature shows who requested the run, not that they accepted the outcome.
 
 `sign_request` and `request_signature_preimage` still build the earlier version 1 signature, which the server refuses for a job step. `sign_request_v2` and `request_signature_preimage_v2` build what a client sends.
 
+## Policies
+
+A policy is your own set of rules for which runs your API key admits. You write it as a JSON document, store it, try it on sample inputs, and then make it the policy in force. Until you activate one, your key runs under the built-in policy.
+
+Verdifax did not write, review or approve your policy. A pass means the rules ran, not that they are good rules.
+
+```python
+from pathlib import Path
+
+# Read the bytes and decode them, so the text is sent exactly, line endings included.
+document = Path("policy.json").read_bytes().decode("utf-8")
+
+uploaded = client.upload_policy(document)  # stores the text; nothing changes yet
+document_hash = uploaded["document_hash"]
+
+# Which rule would fire on sample inputs. This seals nothing.
+trial = client.test_policy(
+    {"subject_type": "agent", "verb": "wire-transfer", "object_type": "transaction",
+     "classification": "CONFIDENTIAL", "mfa_satisfied": False},
+    document_hash=document_hash,
+)
+print(trial["outcome"], trial["fired_rule_id"], trial["reason_code"])
+
+record = client.activate_policy(document_hash)  # the change record
+```
+
+`upload_policy` sends the string it is given, unchanged, because the server hashes those exact bytes as `document_hash`. It raises `ValidationError` for anything that is not a `str`, such as a dict, because serializing an object here would change the hash. `test_policy` takes exactly one of `document` and `document_hash`. `get_policy(document_hash)` returns the stored text as `document`, and `list_policies()` returns your documents with `chain_id`, `newest_activation_hash` and `active_document_hash`.
+
+`activate_policy` reads `GET /policies` for the chain and its newest change, then sends the change naming that newest change. With a `signing_key`, the client signs the change with your request key, which the server requires once a request key is registered on the API key. Without a registered request key, use a client with no `signing_key`: the server refuses a signature it has no key to check. A 409 means another change came first, or the document is not yet effective. The client raises `APIError` with the server's message and does not retry: list the policies again before you decide to repeat the change.
+
+Rolling back is activating an earlier document. It adds one more change to the chain, so the change it undoes stays on the record:
+
+```python
+client.activate_policy(earlier_document_hash)
+```
+
+A run declares the facts the rules read in `policy_context`, and can name the policy it expects with `expected_policy_hash`:
+
+```python
+from verdifax import AttestedContext
+
+receipt = client.attest(
+    payload="transfer 1042",
+    program_id="a" * 64,
+    route_id="wire-transfer",
+    registry_record_hash="b" * 64,
+    attested_context=AttestedContext(actor_id="payments-agent-7", actor_role="payments_agent"),
+    policy_context={
+        "actor_type": "agent",
+        "mfa_satisfied": True,
+        "session_age_seconds": 120,
+        "object_type": "transaction",
+        "object_id": "txn-1042",
+        "classification": "CONFIDENTIAL",
+    },
+    expected_policy_hash=uploaded["policy_hash"],
+)
+```
+
+Every key of `policy_context` is optional. `actor_type` is `agent`, `user`, `service` or `system`; `mfa_satisfied` is a `bool`; `session_age_seconds` is a non-negative `int`; `object_type` is `text`, `transaction`, `code`, `data`, `model` or `file`; `object_id` is a string of at most 256 bytes; and `classification` is `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, `RESTRICTED`, `TOP_SECRET` or `TS_SCI`. The client raises `ValidationError` for an unknown key or any other value before sending, because a misspelt field must never be dropped: a rule on it would read its zero value. `actor_type`, `mfa_satisfied` and `session_age_seconds` describe the attested actor, so they need an `attested_context` that names the actor, such as its `actor_id`; the client and the server refuse them without one. `object_type`, `object_id` and `classification` work without it. The provider helpers attest an AI assistant, so they can send all six.
+
+`expected_policy_hash` is 64 lowercase hex characters. When another policy is active, the server refuses the run with 409, and the client raises `APIError`. `attest`, `execute`, each row of `execute_batch`, `verify_determinism`, the provider helpers and job steps all take both fields. They go into the request before it is signed, so a signed request covers them.
+
+A policy judges what you declared. It cannot show the declared facts are true.
+
+A run the rules refuse still seals a record, and `attest` raises `StageError` with stage `PEPG`, carrying `record_hash`. A refusal stops the action only if your system waits for the answer.
+
+`get_policy_history()` returns the list of changes, oldest first. Save it to a file and check the chain with `verdifax-verify --policy-history FILE`:
+
+```python
+import json
+
+history = client.get_policy_history()
+Path("policy-history.json").write_text(json.dumps(history), encoding="utf-8")
+# verdifax-verify --policy-history policy-history.json
+```
+
+`verdifax.policy_activation_approval(signing_key, chain_id, document_hash, previous_activation_hash)` builds the change's `signature` block without sending anything, and `verdifax.policy_activation_preimage(...)` returns the bytes it signs.
+
 ## Optional execute fields
 
-`attest`, `execute`, `execute_batch` and `verify_determinism` accept `attested_context`, `reproducibility_context`, `request_substance`, `authorization_chain`, `regulatory_scaffolding` and `causal_graph`. Each is recorded as supplied and Verdifax does not check it. The client derives `attested` and `declared` from the fields you provide. Leave out `request_substance["origin"]["source_ip_hash"]` and `["user_agent_hash"]`: the server computes them. `attest`, `execute` and `verify_determinism` refuse them before sending, and a batch row that sets them fails in `results`.
+`attest`, `execute`, `execute_batch` and `verify_determinism` accept `attested_context`, `reproducibility_context`, `request_substance`, `authorization_chain`, `regulatory_scaffolding` and `causal_graph`. Each is recorded as supplied and Verdifax does not check it. The client derives `attested` and `declared` from the fields you provide. `AttestedContext`, `ReproducibilityContext` and `ExecuteRequest` raise `ValidationError` for a field they do not have, and so does an `attested_context` given as a mapping, because the server would drop a misspelt field with no error. A misspelt keyword argument to `attest`, `execute` or `verify_determinism` raises Python's own `TypeError`. Leave out `request_substance["origin"]["source_ip_hash"]` and `["user_agent_hash"]`: the server computes them. `attest`, `execute` and `verify_determinism` refuse them before sending, and a batch row that sets them fails in `results`.
+
+They also accept `policy_context` and `expected_policy_hash`, which the client checks before sending: see [Policies](#policies).
 
 These methods check that `program_id` and `registry_record_hash` are 64 lowercase hex characters and that `route_id` is 1 to 256 printable ASCII characters. A `route_id` outside that range now raises `ValidationError` here, although the server accepts a wider set.
 

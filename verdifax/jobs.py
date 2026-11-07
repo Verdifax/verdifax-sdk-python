@@ -35,6 +35,8 @@ _STEP_ATTEST_OPTIONS = frozenset(
         "authorization_chain",
         "regulatory_scaffolding",
         "causal_graph",
+        "policy_context",
+        "expected_policy_hash",
     }
 )
 

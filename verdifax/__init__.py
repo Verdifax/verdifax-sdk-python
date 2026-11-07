@@ -34,6 +34,8 @@ from ._retry import DEFAULT_MAX_RETRIES
 from ._signing import (
     RequestKeyPair,
     generate_request_key,
+    policy_activation_approval,
+    policy_activation_preimage,
     request_key_change_preimage,
     request_key_registration_body,
     request_signature_preimage,
@@ -147,6 +149,8 @@ def attest(
     timeout: _Optional[float] = None,
     signing_key: _Optional[bytes] = None,
     job: _Optional[_Mapping[str, _Any]] = None,
+    policy_context: _Optional[_Mapping[str, _Any]] = None,
+    expected_policy_hash: _Optional[str] = None,
 ) -> AttestationReceipt:
     """Module-level shortcut: attest a payload using a one-shot client.
 
@@ -159,7 +163,8 @@ def attest(
     :class:`AttestedContext`. Pass ``ai_output_text`` to route the run
     through AIVP governance (the live Claude adapter in production).
     Pass ``signing_key`` to sign the request; see :class:`VerdifaxClient`.
-    Pass ``job`` to place the run in a job map; see
+    Pass ``job`` to place the run in a job map, and ``policy_context`` or
+    ``expected_policy_hash`` for the active policy; see
     :meth:`VerdifaxClient.attest`.
     """
     with from_env(
@@ -173,6 +178,8 @@ def attest(
             attested_context=attested_context,
             ai_output_text=ai_output_text,
             job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
         )
 
 
@@ -257,6 +264,8 @@ __all__ = [
     "format_provider_payload",
     "from_env",
     "generate_request_key",
+    "policy_activation_approval",
+    "policy_activation_preimage",
     "request_key_change_preimage",
     "request_key_registration_body",
     "request_signature_preimage",

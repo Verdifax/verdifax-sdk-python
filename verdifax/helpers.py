@@ -35,6 +35,8 @@ def attest_claude_response(
     client: Optional[VerdifaxClient] = None,
     signing_key: Optional[bytes] = None,
     job: Optional[Mapping[str, Any]] = None,
+    policy_context: Optional[Mapping[str, Any]] = None,
+    expected_policy_hash: Optional[str] = None,
 ) -> AttestationReceipt:
     """Attest an Anthropic Claude prompt/response pair, as provider ``anthropic``.
 
@@ -52,12 +54,23 @@ def attest_claude_response(
     ``job`` places the run in a job map, the same block
     :meth:`VerdifaxClient.attest` takes. The receipt has ``record_hash`` and,
     when signed, ``signed_request``, as :meth:`VerdifaxClient.attest` gives.
+    ``policy_context`` and ``expected_policy_hash`` are checked and sent as
+    :meth:`VerdifaxClient.attest` sends them. The helper attests an AI
+    assistant, so ``policy_context`` may describe that actor.
     """
     own_client = client is None
     client = _resolve_client(client, signing_key)
     try:
         return client.attest_claude_response(
-            prompt, response, program_id, route_id, registry_record_hash, govern=govern, job=job
+            prompt,
+            response,
+            program_id,
+            route_id,
+            registry_record_hash,
+            govern=govern,
+            job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
         )
     finally:
         if own_client:
@@ -75,6 +88,8 @@ def attest_openai_response(
     client: Optional[VerdifaxClient] = None,
     signing_key: Optional[bytes] = None,
     job: Optional[Mapping[str, Any]] = None,
+    policy_context: Optional[Mapping[str, Any]] = None,
+    expected_policy_hash: Optional[str] = None,
 ) -> AttestationReceipt:
     """Attest an OpenAI prompt/response pair, as provider ``openai``.
 
@@ -84,7 +99,15 @@ def attest_openai_response(
     client = _resolve_client(client, signing_key)
     try:
         return client.attest_openai_response(
-            prompt, response, program_id, route_id, registry_record_hash, govern=govern, job=job
+            prompt,
+            response,
+            program_id,
+            route_id,
+            registry_record_hash,
+            govern=govern,
+            job=job,
+            policy_context=policy_context,
+            expected_policy_hash=expected_policy_hash,
         )
     finally:
         if own_client:

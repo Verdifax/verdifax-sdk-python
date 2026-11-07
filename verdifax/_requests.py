@@ -7,9 +7,19 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, Union
 
 import httpx
 
-from ._signing import attach_signature
+from ._signing import attach_signature, policy_activation_signature
 from ._transport import checked_response, parse_signed_response
-from ._validation import job_block, normalize_payload, validate_hex64, validate_positive_id
+from ._validation import (
+    ATTESTED_CONTEXT_FIELDS,
+    EXECUTE_FIELDS,
+    check_policy_actor,
+    job_block,
+    normalize_payload,
+    policy_context_block,
+    refuse_unknown_keys,
+    validate_hex64,
+    validate_positive_id,
+)
 from .exceptions import APIError, ValidationError, VerdifaxError
 from .models import (
     AttestationReceipt,
@@ -37,7 +47,12 @@ def query_params(**values: Any) -> dict[str, Any]:
 
 
 def with_attested_flag(context: Mapping[str, Any]) -> dict[str, Any]:
-    """Copy an ``attested_context`` mapping with ``attested`` derived from its fields."""
+    """Copy an ``attested_context`` mapping with ``attested`` derived from its fields.
+
+    Raises:
+        ValidationError: If the mapping has a key the server does not read.
+    """
+    refuse_unknown_keys(context, ATTESTED_CONTEXT_FIELDS, "attested_context")
     provided = any(is_provided(value) for name, value in context.items() if name != "attested")
     return {**context, "attested": provided}
 
@@ -82,6 +97,29 @@ def refuse_origin_hashes(substance: Optional[Mapping[str, Any]]) -> None:
         )
 
 
+def apply_policy_fields(body: dict[str, Any]) -> dict[str, Any]:
+    """Check ``policy_context`` and ``expected_policy_hash`` in a built body.
+
+    ``body`` is changed in place and returned. Each is left out when it is
+    ``None``. They go into the body before it is serialized, so a signed
+    request covers them.
+
+    Raises:
+        ValidationError: If ``policy_context`` has an unknown key or a value
+            the server refuses, sets an actor value with no attested actor,
+            or ``expected_policy_hash`` is not 64 lowercase hex characters.
+    """
+    context = policy_context_block(body.pop("policy_context", None))
+    if context is not None:
+        check_policy_actor(context, body.get("attested_context"))
+        body["policy_context"] = context
+    expected = body.pop("expected_policy_hash", None)
+    if expected is not None:
+        validate_hex64(expected, "expected_policy_hash")
+        body["expected_policy_hash"] = expected
+    return body
+
+
 def attest_receipt(response: httpx.Response, request_body: Mapping[str, Any]) -> AttestationReceipt:
     """Read a ``POST /execute`` response.
 
@@ -104,17 +142,22 @@ def attest_receipt(response: httpx.Response, request_body: Mapping[str, Any]) ->
 def batch_row(row: BatchRow) -> dict[str, Any]:
     """Turn one batch row into its JSON body.
 
-    Only a ``job`` block is checked here. The server reports any other bad
-    value in that row's result. A mapping takes the same names as
-    ``attest()``, so a ``payload`` of ``str`` or ``bytes`` is sent the way
-    ``attest()`` sends it.
+    Only the names of a row's fields and of its ``attested_context``, the
+    ``job`` block, ``policy_context`` and ``expected_policy_hash`` are
+    checked here. The server reports any other bad value in that row's
+    result. A mapping takes the same names as ``attest()``, so a ``payload``
+    of ``str`` or ``bytes`` is sent the way ``attest()`` sends it.
 
     Raises:
-        ValidationError: If the row's ``job`` block is invalid.
+        ValidationError: If the row has a field the server does not read, or
+            its ``attested_context`` keys, ``job`` block, ``policy_context`` or
+            ``expected_policy_hash`` are invalid. A misspelt field must never
+            be dropped.
     """
     if isinstance(row, ExecuteRequest):
         body = row.model_dump_request()
     elif isinstance(row, Mapping):
+        refuse_unknown_keys(row, EXECUTE_FIELDS, "run")
         body = dict(row)
     else:
         raise ValidationError(
@@ -135,7 +178,7 @@ def batch_row(row: BatchRow) -> dict[str, Any]:
     job = job_block(body.pop("job", None))
     if job is not None:
         body["job"] = job
-    return body
+    return apply_policy_fields(body)
 
 
 def batch_body(
@@ -145,7 +188,9 @@ def batch_body(
 
     Raises:
         ValidationError: If there are no rows, more than ``MAX_BATCH_ROWS``,
-            or an invalid ``job`` block.
+            a row with a field the server does not read, or an invalid
+            ``attested_context``, ``job`` block, ``policy_context`` or
+            ``expected_policy_hash``.
     """
     if len(runs) == 0:
         raise ValidationError("execute_batch needs at least one run")
@@ -210,6 +255,112 @@ def admin_erase_body(
     if dsar_reference:
         body["dsar_reference"] = dsar_reference
     return body
+
+
+POLICIES_PATH = "/policies"
+
+
+def policy_path(document_hash: str, suffix: str = "") -> str:
+    """Validate ``document_hash`` and build ``/policies/{document_hash}``."""
+    validate_hex64(document_hash, "document_hash")
+    return f"{POLICIES_PATH}/{document_hash}{suffix}"
+
+
+def _policy_document(document: Any) -> str:
+    """Refuse a document that is not exact text.
+
+    The server hashes the exact bytes, so a dict or list cannot be sent:
+    serializing it here would decide the text, and so the hash.
+    """
+    if not isinstance(document, str):
+        raise ValidationError(
+            "document must be the policy's exact text as a str, got "
+            f"{type(document).__name__}; serializing an object would change its hash"
+        )
+    try:
+        document.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValidationError("document is not valid Unicode, so it has no exact bytes") from exc
+    return document
+
+
+def policy_upload_body(document: Any) -> dict[str, str]:
+    """The body of ``POST /policies``: the document exactly as given."""
+    return {"document": _policy_document(document)}
+
+
+def policy_test_body(
+    inputs: Mapping[str, Any], document: Optional[str] = None, document_hash: Optional[str] = None
+) -> dict[str, Any]:
+    """The body of ``POST /policies/test``, with exactly one of the two documents.
+
+    Raises:
+        ValidationError: If both or neither of ``document`` and
+            ``document_hash`` are given, ``document`` is not a ``str``,
+            ``document_hash`` is not 64 lowercase hex characters, or
+            ``inputs`` is not a mapping.
+    """
+    if (document is None) == (document_hash is None):
+        raise ValidationError("test_policy needs exactly one of document and document_hash")
+    if not isinstance(inputs, Mapping):
+        raise ValidationError(f"inputs must be a mapping, got {type(inputs).__name__}")
+    body: dict[str, Any] = {"inputs": dict(inputs)}
+    if document_hash is not None:
+        validate_hex64(document_hash, "document_hash")
+        body["document_hash"] = document_hash
+    else:
+        body["document"] = _policy_document(document)
+    return body
+
+
+def policy_history(body: Any) -> list[dict[str, Any]]:
+    """Read ``GET /policies/history``: the list of changes, oldest first.
+
+    Raises:
+        VerdifaxError: If the server did not send a list.
+    """
+    if not isinstance(body, list):
+        raise VerdifaxError("the server's policy history is not a list")
+    return body
+
+
+def policy_activation_body(
+    key: "Optional[Ed25519PrivateKey]", listing: Mapping[str, Any], document_hash: str
+) -> dict[str, Any]:
+    """The body of ``POST /policies/{document_hash}/activate``.
+
+    ``listing`` is the answer of ``GET /policies``. With a key, the body
+    carries its approval of the change.
+
+    Raises:
+        VerdifaxError: If the listing has no usable newest change, or, with a
+            key, no ``chain_id`` to sign.
+    """
+    previous: Any = listing.get("newest_activation_hash")
+    try:
+        validate_hex64(previous, "newest_activation_hash")
+    except ValidationError as exc:
+        raise VerdifaxError(f"GET /policies did not return a usable newest change: {exc}") from exc
+    body: dict[str, Any] = {"previous_activation_hash": previous}
+    if key is None:
+        return body
+    chain_id = listing.get("chain_id")
+    if not isinstance(chain_id, str) or not chain_id:
+        raise VerdifaxError("GET /policies returned no chain_id, so the change cannot be signed")
+    body["signature"] = policy_activation_signature(key, chain_id, document_hash, previous)
+    return body
+
+
+def activation_record(response_body: Mapping[str, Any]) -> dict[str, Any]:
+    """The change record from an activation answer.
+
+    Raises:
+        VerdifaxError: If the answer has no ``activation`` object.
+    """
+    record = response_body.get("activation")
+    if not isinstance(record, dict):
+        raise VerdifaxError("the server's answer has no activation record")
+    return record
 
 
 def format_provider_payload(provider: str, prompt: str, response: Union[str, bytes]) -> str:
@@ -282,7 +433,10 @@ def governed_text(response: Union[str, bytes]) -> str:
 __all__ = [
     "BatchRow",
     "MAX_BATCH_ROWS",
+    "POLICIES_PATH",
+    "activation_record",
     "admin_erase_body",
+    "apply_policy_fields",
     "attest_receipt",
     "attested_block",
     "batch_body",
@@ -291,6 +445,11 @@ __all__ = [
     "format_provider_payload",
     "governed_text",
     "parse_export_csv",
+    "policy_activation_body",
+    "policy_history",
+    "policy_path",
+    "policy_test_body",
+    "policy_upload_body",
     "provider_attest_args",
     "query_params",
     "refuse_origin_hashes",

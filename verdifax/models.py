@@ -11,7 +11,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Iterator, List, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .exceptions import ValidationError
 
 # ── Stage metadata ──────────────────────────────────────────────────────────────
 # Names and ordering kept in sync with verdifax-orchestrator/internal/pipeline.
@@ -65,6 +67,25 @@ class _AliasedModel(BaseModel):
         extra="ignore",
         frozen=True,
     )
+
+
+def refuse_unknown_fields(model: type[BaseModel], data: Any) -> Any:
+    """Refuse a field a request model does not have, naming it.
+
+    The server ignores a key it does not know, so a misspelt field would be
+    dropped with no error. Response models keep ignoring unknown fields, as a
+    newer server may add some.
+
+    Raises:
+        ValidationError: The SDK's own error, which pydantic passes through.
+    """
+    if isinstance(data, dict):
+        known = set(model.model_fields)
+        known.update(info.alias for info in model.model_fields.values() if info.alias)
+        unknown = sorted(str(name) for name in data if name not in known)
+        if unknown:
+            raise ValidationError(f"{model.__name__} has unknown fields: {', '.join(unknown)}")
+    return data
 
 
 class StageResult(_AliasedModel):
@@ -390,12 +411,17 @@ class AttestedContext(_AliasedModel):
 
     # Forbid pydantic frozen behavior here, callers will mutate fields
     # while building the block, then hand it off. We keep validation but
-    # not immutability.
+    # not immutability. A request model refuses an unknown field.
     model_config = ConfigDict(
         populate_by_name=True,
-        extra="ignore",
+        extra="forbid",
         frozen=False,
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_unknown(cls, data: Any) -> Any:
+        return refuse_unknown_fields(cls, data)
 
     def with_auto_attested(self) -> "AttestedContext":
         """Return a copy with ``attested = True`` if any other field is set.
@@ -482,6 +508,25 @@ class ExecuteRequest(_AliasedModel):
         default=None,
         description="Where this run sits in a job map (optional).",
     )
+    # What the request declares for the rules of the active policy to read.
+    # The client checks it before sending. A rule on it judges what was
+    # declared; it cannot show the declared facts are true.
+    policy_context: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Declared facts for the active policy's rules (optional).",
+    )
+    expected_policy_hash: Optional[str] = Field(
+        default=None,
+        description="The policy_hash this run must be decided under (optional).",
+    )
+
+    # A request model refuses an unknown field, so a typo cannot be dropped.
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_unknown(cls, data: Any) -> Any:
+        return refuse_unknown_fields(cls, data)
 
     def model_dump_request(self) -> dict[str, Any]:
         """Serialize to the JSON shape the API expects (snake_case, no nulls)."""
