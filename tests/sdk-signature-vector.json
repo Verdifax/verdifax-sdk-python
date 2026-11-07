@@ -8,6 +8,8 @@
   "activation_previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
   "activation_signature": "x6GZ2Fz72+iy2hkDmkTx+QsSV3NMiApvREgY+zYEkcQEgVWJUhcJ5nyHHKy7VQ7AjhTaM4nMQg5rCvBeyX14Aw==",
   "ai_output_hash": "a7c9985d46ca5719357525cc365641e45d6882fb66949d4c08989883f8148c8b",
+  "approver_proof": "3ln674gHq+OJQknGTUpAUVCXDkhN/zBY7pMisW6uWB3k0ahVfDvfIwpxmZ1jWx6IwdOlr81LcguAJ4YlkRuuBg==",
+  "approver_proof_preimage_hex": "76657264696661782e617070726f7665722d6b65792e76310041364548762f504f454c3464634e3059353076416d57666b316a436270513166486479475a424a564d62673d",
   "body_hash": "75a84b768b6b92cccb7660a8d33951532928ab14bfb5caac250928b827e8add3",
   "key_change_preimage_hex": "76657264696661782e726571756573742d6b65792d6368616e67652e76310041364548762f504f454c3464634e3059353076416d57666b316a436270513166486479475a424a564d62673d00323032362d31312d30365431323a30303a30305a003066306630663066306630663066306630663066306630663066306630663066",
   "key_change_signature": "vRiVYeAEK+KibXvJR9pqGHfvfT8tfxgZ05ijpG2JWAPmepPeIEw83lqft2I+hQ86tMnUru07MP7HUL+ziSAGBw==",
@@ -19,5 +21,14 @@
   "seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   "signature": "htBLA8pturockuoaJhnI6B6C7rNcPxM5moiiLsrn1cZUDula7eFi4RHx+RJc8Ked59YZyE4cAQQEDb6P4lBkBQ==",
   "signed_at": "2026-11-06T12:00:00Z",
-  "signed_request": "{\"payload_text\":\"hello\",\"program_id\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"route_id\":\"route-a\",\"registry_record_hash\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"ai_output_text\":\"the answer\",\"job\":{\"job_id\":\"loan-1\",\"step_id\":\"decide\",\"previous_record_hashes\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],\"external_previous\":[\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"],\"final\":true}}"
+  "signed_request": "{\"payload_text\":\"hello\",\"program_id\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"route_id\":\"route-a\",\"registry_record_hash\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"ai_output_text\":\"the answer\",\"job\":{\"job_id\":\"loan-1\",\"step_id\":\"decide\",\"previous_record_hashes\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],\"external_previous\":[\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"],\"final\":true}}",
+  "signoff_chain_id": "account-7",
+  "signoff_decision": "approve",
+  "signoff_note_hash": "326381f36e7fb0c3a99217dc3e78e3b246d593ff25c53f5168be1d94e153def3",
+  "signoff_preimage_hex": "76657264696661782e7369676e6f66662e7631006163636f756e742d370030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030007265636f726400343200616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161610000617070726f7665003332363338316633366537666230633361393932313764633365373865336232343664353933666632356335336635313638626531643934653135336465663300323032362d31312d30365431323a30303a30305a003066306630663066306630663066306630663066306630663066306630663066",
+  "signoff_previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "signoff_signature": "rSQx3IIZsh2x2vVUVeSrpalMl7nCZCasaWifsVZtxNLOt/XL2swjF4o9VUPvd3KzrQOxtLahRMdoV1KTLj0uCg==",
+  "signoff_target_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "signoff_target_kind": "record",
+  "signoff_target_run_id": 42
 }

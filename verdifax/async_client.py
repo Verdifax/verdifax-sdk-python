@@ -53,6 +53,21 @@ from ._requests import (
     run_path,
 )
 from ._retry import AsyncRetryingClient, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY
+from ._signoffs import (
+    APPROVERS_PATH,
+    SIGNOFF_HISTORY_PATH,
+    SignOffTargetLike,
+    ApproverKeyLike,
+    approver_body,
+    approver_path,
+    newest_signoff_path,
+    prepare_signoff,
+    run_signoffs_path,
+    signoff_body,
+    signoff_list,
+    signoff_record,
+    submit_signoff_path,
+)
 from ._signing import (
     ACCOUNT_REQUEST_KEY_PATH,
     REQUEST_KEY_PATH,
@@ -695,6 +710,60 @@ class AsyncVerdifaxClient:
             self._signing_key, listing, document_hash, f"GET {ACCOUNT_POLICIES_PATH}"
         )
         return activation_record(await self._send_json("POST", path, body))
+
+    # ── sign-off ───────────────────────────────────────────────────────────
+    async def register_approver(self, name: str, approver_key: ApproverKeyLike) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.register_approver`.
+
+        The proof is computed on this machine, or a ready-made proof is
+        verified here and refused before sending if it does not verify. Only
+        the public key, the name and the proof are sent.
+        """
+        body = approver_body(name, approver_key, self._signing_key)
+        return await self._send_json("POST", APPROVERS_PATH, body)
+
+    async def list_approvers(self) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.list_approvers`."""
+        return await self._get_json(APPROVERS_PATH)
+
+    async def revoke_approver(self, approver_id: int) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.revoke_approver`."""
+        return await self._send_json("DELETE", approver_path(approver_id))
+
+    async def sign_off(
+        self,
+        target: SignOffTargetLike,
+        decision: str,
+        approver_key: bytes,
+        note: Optional[str] = None,
+        as_owner: bool = False,
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.sign_off`.
+
+        Every input is checked before anything is sent. The note's text is
+        never sent, only its SHA-256. A 409 raises :class:`APIError` and is
+        not retried.
+        """
+        newest_path, submit_path = newest_signoff_path(as_owner), submit_signoff_path(as_owner)
+        prepared = prepare_signoff(target, decision, approver_key, note, self._signing_key)
+        newest = await self._get_json(newest_path)
+        body = signoff_body(prepared, newest, f"GET {newest_path}")
+        answer = await self._send_json("POST", submit_path, body)
+        return signoff_record(answer, body)
+
+    async def get_signoffs(self, run_id: int, as_owner: bool = False) -> list[dict[str, Any]]:
+        """Async version of :meth:`VerdifaxClient.get_signoffs`."""
+        path = run_signoffs_path(run_id, as_owner)
+        return signoff_list(parse_response(await self._get(path)), "sign-off list")
+
+    async def get_newest_signoff(self, as_owner: bool = False) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.get_newest_signoff`."""
+        return await self._get_json(newest_signoff_path(as_owner))
+
+    async def get_signoff_history(self) -> list[dict[str, Any]]:
+        """Async version of :meth:`VerdifaxClient.get_signoff_history`."""
+        body = parse_response(await self._get(SIGNOFF_HISTORY_PATH))
+        return signoff_list(body, "sign-off history")
 
     async def admin_create_account(
         self, name: str, tier: Optional[str] = None, expires_at: Optional[str] = None

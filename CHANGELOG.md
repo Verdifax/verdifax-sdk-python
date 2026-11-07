@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.4.0
+
+Customer sign-off on results. An approver signs a decision, approve or reject, on one exact result with an approver key the account's owner registered, and Verdifax logs it on the public log.
+
+Added, on `VerdifaxClient` and as coroutines on `AsyncVerdifaxClient`:
+
+- `register_approver(name, approver_key)`: `POST /account/approvers`, for the owner key. The proof is computed on this machine from the approver's private key, or taken from `approver_key_proof`, which the approver can run on their own machine; a ready-made proof is verified on this machine and refused before sending if it does not verify. Only the public key, the name and the proof are sent.
+- `list_approvers()` and `revoke_approver(approver_id)`: `GET /account/approvers` and `DELETE /account/approvers/{id}`.
+- `sign_off(target, decision, approver_key, note=None, as_owner=False)`: reads `GET /signoffs/newest`, hashes the note, signs on this machine and submits with `POST /signoffs`. With `as_owner=True` it uses `GET /account/signoffs/newest` and `POST /account/signoffs`. It raises `ValidationError` for a bad target, decision, note, approver key or `as_owner` before sending anything, and for an approver key that is the client's own `signing_key`. The note's text is never sent, only its SHA-256. An empty note is refused; with no note, the body carries no `note_hash`.
+- `get_signoffs(run_id, as_owner=False)`: `GET /runs/{id}/signoffs`, or `GET /account/runs/{id}/signoffs` for the owner key.
+- `get_newest_signoff(as_owner=False)`: `GET /signoffs/newest`, or `GET /account/signoffs/newest`.
+- `get_signoff_history()`: `GET /account/signoffs/history`.
+- `signoff_preimage(...)` and `approver_key_proof(private_key)`, which make no request, and the `SignOffTarget` model.
+
+Changed:
+
+- `RunsExport` and `AccountRunsExport` carry `signoffs`, the account's sign-offs, which an owner key's `export_account_runs` now receives.
+
+An approver key is registered by the account's owner, and it is never a request key in the same account. A sign-off shows that the holder of a registered approver key signed that decision on that exact result, and that Verdifax logged it on the public log. It does not show that the review was careful, that the result is right, or who the person is: a key is not an identity. A sign-off gates nothing on its own. A later sign-off on the same result supersedes the earlier one, and nothing is deleted. Verdifax did not review the result.
+
 ## 1.3.0
 
 Accounts. An account is a company, and every API key belongs to one account for life. The account's owner key manages the account and cannot run anything.

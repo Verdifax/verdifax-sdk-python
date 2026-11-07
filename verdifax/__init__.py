@@ -31,6 +31,7 @@ from typing import (
 
 from ._requests import MAX_BATCH_ROWS, format_provider_payload
 from ._retry import DEFAULT_MAX_RETRIES
+from ._signoffs import approver_key_proof, signoff_preimage
 from ._signing import (
     RequestKeyPair,
     generate_request_key,
@@ -81,6 +82,7 @@ from .models import (
     RunSummary,
     RunsExport,
     RunsExportCSV,
+    SignOffTarget,
     StageResult,
     VerifyResponse,
 )
@@ -252,6 +254,7 @@ __all__ = [
     "RunsExport",
     "RunsExportCSV",
     "STAGE_NAMES",
+    "SignOffTarget",
     "StageError",
     "StageResult",
     "UnsupportedOperationError",
@@ -260,6 +263,7 @@ __all__ = [
     "VerdifaxError",
     "VerifyResponse",
     "__version__",
+    "approver_key_proof",
     "attest",
     "attest_claude_response",
     "attest_openai_response",
@@ -276,6 +280,7 @@ __all__ = [
     "section0",
     "sign_request",
     "sign_request_v2",
+    "signoff_preimage",
     "validate_hex64",
     "validate_route_id",
     "verify",

@@ -620,6 +620,8 @@ class RunsExport(_AliasedModel):
     Verdifax assigned, not a verified company identity.
     ``account_policy_documents`` and ``account_policy_history`` are the
     account's, and stay empty while the account has no policy document.
+    ``signoffs`` is the account's whole chain of sign-offs, oldest first,
+    in an owner key's export; it stays empty in a member key's export.
     """
 
     ok: bool = True
@@ -634,6 +636,7 @@ class RunsExport(_AliasedModel):
     account_id: str = ""
     account_policy_documents: List[dict[str, Any]] = Field(default_factory=list)
     account_policy_history: List[dict[str, Any]] = Field(default_factory=list)
+    signoffs: List[dict[str, Any]] = Field(default_factory=list)
 
 
 class AccountRunsExport(RunsExport):
@@ -643,7 +646,36 @@ class AccountRunsExport(RunsExport):
     not runs made elsewhere. An owner key has no policy of its own, so
     ``policy_documents`` and ``policy_history`` stay empty; the account's
     are in ``account_policy_documents`` and ``account_policy_history``.
+    ``signoffs`` holds the account's sign-offs, oldest first, in the form
+    ``verdifax-verify --signoff-history`` reads.
     """
+
+
+class SignOffTarget(_AliasedModel):
+    """The exact result a sign-off names, for :meth:`VerdifaxClient.sign_off`.
+
+    ``kind`` is ``record`` for a completed run, ``receipt`` for a refused or
+    halted run, or ``job`` for a whole job by its final step. ``digest`` is
+    what the result's public-log entry covers: for a record, the
+    ``bundle_anchor`` ``anchored_digest`` in :meth:`VerdifaxClient.get_run_artifacts`;
+    for a receipt, the receipt's ``hash``; for a job, the final step's record
+    digest, found as a record's is. ``job_id`` is set for a job and only for a
+    job. The client checks each value before anything is sent.
+    """
+
+    kind: str
+    run_id: int
+    digest: str
+    job_id: str = ""
+
+    # A request model refuses an unknown field, so a typo cannot be dropped,
+    # and strict types, so a run_id of True or "42" is not converted.
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True, strict=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_unknown(cls, data: Any) -> Any:
+        return refuse_unknown_fields(cls, data)
 
 
 class RunsExportCSV(_AliasedModel):
@@ -716,6 +748,7 @@ __all__ = [
     "RunsExport",
     "RunsExportCSV",
     "STAGE_NAMES",
+    "SignOffTarget",
     "StageResult",
     "VerifyResponse",
 ]

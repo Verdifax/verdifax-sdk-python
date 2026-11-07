@@ -52,6 +52,21 @@ from ._requests import (
     run_path,
 )
 from ._retry import DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY, RetryingClient
+from ._signoffs import (
+    APPROVERS_PATH,
+    SIGNOFF_HISTORY_PATH,
+    SignOffTargetLike,
+    ApproverKeyLike,
+    approver_body,
+    approver_path,
+    newest_signoff_path,
+    prepare_signoff,
+    run_signoffs_path,
+    signoff_body,
+    signoff_list,
+    signoff_record,
+    submit_signoff_path,
+)
 from ._signing import (
     ACCOUNT_REQUEST_KEY_PATH,
     REQUEST_KEY_PATH,
@@ -992,7 +1007,8 @@ class VerdifaxClient:
 
         Takes the same arguments as :meth:`export_runs` and covers every key
         in the account. The answer adds ``account_id``,
-        ``account_policy_documents`` and ``account_policy_history``. It
+        ``account_policy_documents``, ``account_policy_history`` and
+        ``signoffs``, the account's chain of sign-offs. It
         states what was stored, not a verdict, and covers the runs the
         account's keys made through Verdifax, not runs made elsewhere.
 
@@ -1109,6 +1125,181 @@ class VerdifaxClient:
             self._signing_key, listing, document_hash, f"GET {ACCOUNT_POLICIES_PATH}"
         )
         return activation_record(self._send_json("POST", path, body))
+
+    # ── sign-off ───────────────────────────────────────────────────────────
+    # An approver signs approve or reject on one exact result with a key the
+    # account's owner registered. A sign-off shows the holder of a registered
+    # approver key signed that decision on that exact result, and Verdifax
+    # logged it on the public log. It does not show the review was careful,
+    # the result right, or who the person is, and it gates nothing on its
+    # own. Methods that serve both a member route and an /account route take
+    # as_owner=True for the owner key's route.
+    def register_approver(self, name: str, approver_key: ApproverKeyLike) -> dict[str, Any]:
+        """Register an approver key to the account with ``POST /account/approvers``.
+
+        Needs the account's owner key. The proof that the key's holder has
+        its private key is computed on this machine: pass the approver's 32
+        raw private key bytes, or, so the private key never leaves the
+        approver's machine, the answer of :func:`verdifax.approver_key_proof`
+        that the approver built there. A ready-made proof is verified here,
+        and one that does not verify is refused before anything is sent.
+        Only the public key, the name and the proof are sent.
+
+        An approver key is never a request key in the same account, so the
+        key that requested a run can never sign it off; the server answers
+        409 for such a key.
+
+        Args:
+            name: The approver's name, as the account lists it. At most 200
+                bytes. It is a label, not a verified identity.
+            approver_key: The approver's private key, or
+                ``{"public_key": ..., "proof": ...}``.
+
+        Returns:
+            The approver: ``id``, ``public_key``, ``name``, ``account_id``,
+            ``registered_at`` and ``revoked``.
+
+        Raises:
+            ValidationError: If ``name`` is empty or too long, the key is not
+                valid, a ready-made proof does not verify, or the key is this
+                client's own ``signing_key``, before anything is sent.
+            APIError: For a non-2xx response, for example 409.
+            ConnectionError: If the API was unreachable.
+        """
+        body = approver_body(name, approver_key, self._signing_key)
+        return self._send_json("POST", APPROVERS_PATH, body)
+
+    def list_approvers(self) -> dict[str, Any]:
+        """The account's approver keys, revoked ones included, from ``GET /account/approvers``.
+
+        Needs the account's owner key.
+
+        Returns:
+            The server's object: ``ok``, ``account_id`` and ``approvers``.
+        """
+        return self._get_json(APPROVERS_PATH)
+
+    def revoke_approver(self, approver_id: int) -> dict[str, Any]:
+        """Revoke an approver key with ``DELETE /account/approvers/{id}``.
+
+        Needs the account's owner key. The key's earlier sign-offs stay on
+        the record.
+
+        Raises:
+            ValidationError: If ``approver_id`` is not a positive integer.
+            APIError: For a non-2xx response, for example 404 for no such
+                active approver in the account.
+            ConnectionError: If the API was unreachable.
+        """
+        return self._send_json("DELETE", approver_path(approver_id))
+
+    def sign_off(
+        self,
+        target: SignOffTargetLike,
+        decision: str,
+        approver_key: bytes,
+        note: Optional[str] = None,
+        as_owner: bool = False,
+    ) -> dict[str, Any]:
+        """Sign a decision on one exact result with an approver key, and submit it.
+
+        Checks every input first, then reads the account's chain and its
+        newest sign-off from ``GET /signoffs/newest``, signs on this machine,
+        and sends ``POST /signoffs``. With ``as_owner=True`` it uses the owner
+        key's routes, ``GET /account/signoffs/newest`` and
+        ``POST /account/signoffs``. Any key in the account can submit; the
+        approver's signature, not the calling key, decides who signed.
+
+        The approver's private key never leaves this machine. The note's
+        text is never sent: the client sends only its SHA-256 as
+        ``note_hash``, so keep the text yourself to show it matches.
+
+        A later sign-off on the same result supersedes the earlier one, and
+        nothing is deleted.
+
+        Args:
+            target: A :class:`SignOffTarget`, or a mapping with ``kind``
+                (``record``, ``receipt`` or ``job``), ``run_id``, ``digest``
+                and, for a job only, ``job_id``. ``digest`` is what the
+                result's public-log entry covers. A record's digest is its
+                ``bundle_anchor`` ``anchored_digest``, in the JSON
+                :meth:`get_run_artifacts` returns. A receipt's digest is its
+                ``hash``, from :meth:`get_deny_receipt` or the other receipt
+                methods. A job's digest is its final step's record digest.
+            decision: ``approve`` or ``reject``.
+            approver_key: The 32 raw bytes of a registered approver's Ed25519
+                private key. It must not be this client's ``signing_key``.
+            note: Optional text of the approver's note. Only its hash is sent.
+                An empty string is refused; leave ``note`` out for no note,
+                and the body then carries no ``note_hash``.
+            as_owner: Use the owner key's routes.
+
+        Returns:
+            The sign-off record, in the form ``verdifax-verify --signoff``
+            reads, with its ``signoff_hash``, ``sequence`` and ``anchor``.
+
+        Raises:
+            ValidationError: For a bad target, decision, note (an empty one
+                included), approver key or ``as_owner``, before anything is
+                sent.
+            VerdifaxError: If the newest route gave no account chain or no
+                usable newest sign-off, or the record sent back is not the
+                sign-off sent.
+            APIError: For a non-2xx response. A 409 means the chain moved,
+                or the target is not a result of the account or its digest
+                is not the one its public-log entry covers. It is not retried.
+            ConnectionError: If the API was unreachable.
+        """
+        newest_path, submit_path = newest_signoff_path(as_owner), submit_signoff_path(as_owner)
+        prepared = prepare_signoff(target, decision, approver_key, note, self._signing_key)
+        newest = self._get_json(newest_path)
+        body = signoff_body(prepared, newest, f"GET {newest_path}")
+        return signoff_record(self._send_json("POST", submit_path, body), body)
+
+    def get_signoffs(self, run_id: int, as_owner: bool = False) -> list[dict[str, Any]]:
+        """The sign-offs on one run, oldest first, from ``GET /runs/{id}/signoffs``.
+
+        A member key reads the runs it made. With ``as_owner=True`` the
+        owner key reads any run of the account from
+        ``GET /account/runs/{id}/signoffs``. Save the list with ``json.dump``
+        and check it with ``verdifax-verify --signoff FILE``; the latest
+        sign-off is the decision in force.
+
+        Raises:
+            ValidationError: If ``run_id`` is not a positive integer.
+            VerdifaxError: If the server did not send a list.
+            APIError: For a non-2xx response, for example 404.
+            ConnectionError: If the API was unreachable.
+        """
+        path = run_signoffs_path(run_id, as_owner)
+        return signoff_list(parse_response(self._get(path)), "sign-off list")
+
+    def get_newest_signoff(self, as_owner: bool = False) -> dict[str, Any]:
+        """What an approver signs against, from ``GET /signoffs/newest``.
+
+        With ``as_owner=True`` it reads ``GET /account/signoffs/newest``.
+
+        Returns:
+            The server's object: ``ok``, ``chain_id`` (such as
+            ``account-7``), ``newest_signoff_hash`` (64 zeros before the
+            first sign-off) and ``sequence``.
+        """
+        return self._get_json(newest_signoff_path(as_owner))
+
+    def get_signoff_history(self) -> list[dict[str, Any]]:
+        """The account's whole chain of sign-offs, oldest first.
+
+        Calls ``GET /account/signoffs/history``, which needs the owner key,
+        and returns the list as the server sent it. Save it with
+        ``json.dump`` and check it with ``verdifax-verify --signoff-history FILE``.
+
+        Raises:
+            VerdifaxError: If the server did not send a list.
+            APIError: For a non-2xx response.
+            ConnectionError: If the API was unreachable.
+        """
+        body = parse_response(self._get(SIGNOFF_HISTORY_PATH))
+        return signoff_list(body, "sign-off history")
 
     def admin_create_account(
         self, name: str, tier: Optional[str] = None, expires_at: Optional[str] = None

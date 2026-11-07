@@ -142,6 +142,13 @@ asyncio.run(main())
 | `test_account_policy(inputs, document=None, document_hash=None)` | `POST /account/policies/test` | owner key |
 | `get_account_policy_history()` | `GET /account/policies/history` | owner key |
 | `activate_account_policy(document_hash)` | `GET /account/policies`, then `POST /account/policies/{document_hash}/activate` | owner key |
+| `register_approver(name, approver_key)` | `POST /account/approvers` | owner key |
+| `list_approvers()` | `GET /account/approvers` | owner key |
+| `revoke_approver(approver_id)` | `DELETE /account/approvers/{id}` | owner key |
+| `sign_off(target, decision, approver_key, note=None, as_owner=False)` | `GET /signoffs/newest`, then `POST /signoffs`; with `as_owner=True`, `GET /account/signoffs/newest`, then `POST /account/signoffs` | required, or owner key |
+| `get_signoffs(run_id, as_owner=False)` | `GET /runs/{run_id}/signoffs`; with `as_owner=True`, `GET /account/runs/{run_id}/signoffs` | required, or owner key |
+| `get_newest_signoff(as_owner=False)` | `GET /signoffs/newest`; with `as_owner=True`, `GET /account/signoffs/newest` | required, or owner key |
+| `get_signoff_history()` | `GET /account/signoffs/history` | owner key |
 | `admin_create_account(name, tier=None, expires_at=None)` | `POST /admin/accounts` | admin |
 | `admin_list_accounts()` | `GET /admin/accounts` | admin |
 | `admin_create_key(name, account_id=None)` | `POST /admin/keys` | admin |
@@ -150,7 +157,7 @@ asyncio.run(main())
 | `admin_clear_request_key(key_id)` | `DELETE /admin/keys/{id}/request-key` | admin |
 | `admin_erase(...)` | `POST /admin/erase` | admin |
 
-These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `policy_activation_preimage`, `policy_activation_approval`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
+These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `policy_activation_preimage`, `policy_activation_approval`, `signoff_preimage`, `approver_key_proof`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
 
 `get_run_artifacts`, `get_public_bundle` and `get_public_bundle_by_token` return the exact JSON text the server sent, so you can save it and check it with `verdifax-verify`.
 
@@ -421,11 +428,67 @@ An account policy is your own. Verdifax did not write, review or approve it. Eve
 
 The account policy methods take the same arguments and return the same objects as the [Policies](#policies) methods, on the account's documents. `list_account_policies()` returns the account's chain as `chain_id`, such as `account-7`. `activate_account_policy` reads `GET /account/policies` for that chain and its newest change, and signs the change exactly as `activate_policy` does, with the owner key's request key. The server refuses every unsigned change to an account's policy, so `activate_account_policy` raises `ValidationError` on a client with no `signing_key`, before it sends anything. `get_account_policy_history()` returns the account's changes, oldest first, as the server sent them.
 
-`list_account_runs` and `export_account_runs` cover every key in the account. The account's view covers the runs its keys made through Verdifax, not runs made elsewhere. `export_account_runs` returns an `AccountRunsExport`: the fields of `export_runs` with `account_id`, `account_policy_documents` and `account_policy_history`. `export_account_runs_csv` returns the same rows as raw CSV text, and checks the count headers as `export_runs_csv` does.
+`list_account_runs` and `export_account_runs` cover every key in the account. The account's view covers the runs its keys made through Verdifax, not runs made elsewhere. `export_account_runs` returns an `AccountRunsExport`: the fields of `export_runs` with `account_id`, `account_policy_documents`, `account_policy_history` and `signoffs`, the account's sign-offs, oldest first. `export_account_runs_csv` returns the same rows as raw CSV text, and checks the count headers as `export_runs_csv` does.
 
 `create_account_key(name, expires_at=None)` returns the new key with its `secret`, shown this once. The key takes the account's tier, and a key on a trial account needs a request key before it can run, as every trial key does. `revoke_account_key(key_id)` revokes a member key. For a key outside the account, or an owner key, the server answers 404 and the client raises `APIError`. `clear_account_request_key()` works as `clear_request_key()`: the client then drops its signing key, and the account's policy cannot be changed until the owner registers another request key.
 
 An administrator can put a new customer key in an existing account with `admin_create_key(name, account_id=7)`, where `7` is the number in `account-7`. Without `account_id`, the key gets an account of its own. A key never changes account.
+
+## Sign-off
+
+An approver signs a decision, approve or reject, on one exact result: a completed run's record, a refused or halted run's receipt, or a whole job by its final step. The approver signs on their own machine with an approver key, and any key in the account submits the sign-off.
+
+An approver key is registered by the account's owner, and it is never a request key in the same account. The server refuses to register a key that is a request key in the account, so the key that requested a run can never sign it off, and the client refuses an approver key that is its own `signing_key` before sending anything.
+
+```python
+import json
+from pathlib import Path
+
+import verdifax
+from verdifax import VerdifaxClient
+
+# The approver makes a new Ed25519 key pair on their own machine, keeps the
+# private key secret, and never registers it as a request key.
+approver = verdifax.generate_request_key()
+proven = verdifax.approver_key_proof(approver.private_key)  # public key and proof only
+
+# The owner registers it. Only the public key, the name and the proof are sent.
+owner = VerdifaxClient(api_key=owner_secret)
+owner.register_approver("Dana, credit review", proven)
+
+# The digest is what the result's public-log entry covers. The member key that
+# made run 42 reads its record.
+member = VerdifaxClient(api_key=member_secret)
+artifacts = json.loads(member.get_run_artifacts(42))
+digest = artifacts["bundle_anchor"]["anchored_digest"]
+
+# The approver signs and submits. The note's text stays here; only its hash is sent.
+record = member.sign_off(
+    {"kind": "record", "run_id": 42, "digest": digest},
+    "approve",
+    approver.private_key,
+    note="checked against the loan file",
+)
+print(record["sequence"], record["signoff_hash"])
+
+# Save the run's sign-offs and check them offline.
+Path("signoffs.json").write_text(json.dumps(member.get_signoffs(42)), encoding="utf-8")
+# verdifax-verify --signoff signoffs.json ...
+```
+
+`register_approver(name, approver_key)` takes the approver's 32 raw private key bytes, and computes the proof on this machine, or the answer of `approver_key_proof(private_key)`, which the approver can build on their own machine so the private key never leaves it. A ready-made proof is verified on this machine, and one that does not verify raises `ValidationError` before anything is sent. Either way only the public key, the name and the proof are sent. `list_approvers()` lists the account's approver keys, revoked ones included, and `revoke_approver(approver_id)` revokes one. A revoked key's earlier sign-offs stay on the record.
+
+`sign_off(target, decision, approver_key, note=None, as_owner=False)` checks every input first and raises `ValidationError` before anything is sent: the target's `kind` is `record`, `receipt` or `job`; `run_id` is a positive `int`; `digest` is 64 lowercase hex characters; `job_id` is set for a job and only for a job; `decision` is `approve` or `reject`. The target is a `SignOffTarget` or a mapping with those names. Then it reads the account's chain and newest sign-off from `GET /signoffs/newest`, signs on this machine, and submits with `POST /signoffs`. The owner key passes `as_owner=True` to use `GET /account/signoffs/newest` and `POST /account/signoffs`, and `get_signoffs` and `get_newest_signoff` take `as_owner` the same way. A 409 means another sign-off came first, or the target is not a result of the account or its digest is not the one its public-log entry covers; the client raises `APIError` and does not retry.
+
+The digest is what the result's public-log entry covers. A record's digest is the `bundle_anchor` `anchored_digest` in the JSON `get_run_artifacts(run_id)` returns. A receipt's digest is its `hash`, from `get_deny_receipt(run_id)` or the other receipt methods. A job's digest is its final step's record digest, with the job's `job_id`.
+
+The note's text is never sent. The client sends only its SHA-256 as `note_hash`, so keep the text yourself to show which note was signed. An empty `note` raises `ValidationError`; with no note, leave `note` out and the body carries no `note_hash`. `signed_at` is the current time and the nonce is 32 fresh hex characters.
+
+A sign-off shows that the holder of a registered approver key signed that decision on that exact result, and that Verdifax logged it on the public log. It does not show that the review was careful, that the result is right, or who the person is: a key is not an identity. A sign-off gates nothing on its own. A later sign-off on the same result supersedes the earlier one, and nothing is deleted. Verdifax did not review the result.
+
+`get_signoffs(run_id)` returns a run's sign-offs, oldest first, in the form `verdifax-verify --signoff FILE` reads; the latest is the decision in force. `get_signoff_history()` returns the account's whole chain for the owner key, in the form `verdifax-verify --signoff-history FILE` reads, and the owner's `export_account_runs` carries the same chain as `signoffs`. `verdifax-verify` reads sign-offs since v0.22.0.
+
+`verdifax.signoff_preimage(chain_id, previous_signoff_hash, target, decision, note_hash, signed_at, nonce)` returns the bytes an approver key signs, and `verdifax.approver_key_proof(private_key)` returns the public key and proof to register. Neither makes a request.
 
 ## Optional execute fields
 

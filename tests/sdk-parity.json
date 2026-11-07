@@ -140,6 +140,12 @@
     "expected_policy_hash"
   ],
   "helpers": {
+    "approver_key_proof": {
+      "go": "ApproverKeyProof",
+      "node": "approverKeyProof",
+      "python": "approver_key_proof",
+      "r": "verdifax_approver_key_proof"
+    },
     "capture_environment": {
       "go": "CaptureEnvironment",
       "node": "captureEnvironment",
@@ -248,6 +254,12 @@
       "python": "sign_request",
       "r": "verdifax_sign_request"
     },
+    "signoff_preimage": {
+      "go": "SignOffPreimage",
+      "node": "signOffPreimage",
+      "python": "signoff_preimage",
+      "r": "verdifax_signoff_preimage"
+    },
     "validate_hex64": {
       "go": "ValidateHex64",
       "node": "validateHex64",
@@ -263,7 +275,8 @@
   },
   "notes": {
     "go_provider_govern": "Go passes the option verdifax.WithGovern(); Node passes govern: true; Python govern=True; R govern = TRUE.",
-    "python_async": "Every python method above also exists on AsyncVerdifaxClient as a coroutine."
+    "python_async": "Every python method above also exists on AsyncVerdifaxClient as a coroutine.",
+    "account_routes": "Methods that serve both a member route and an /account route take an option to use the owner key's route: Go AsOwner, Node asOwner, Python as_owner, R as_owner."
   },
   "options": {
     "provider_govern": {
@@ -282,6 +295,23 @@
     "AsyncVerdifaxClient.verify"
   ],
   "routes": {
+    "DELETE /account/approvers/{id}": {
+      "go": [
+        "RevokeApprover"
+      ],
+      "node": [
+        "revokeApprover"
+      ],
+      "python": [
+        "revoke_approver"
+      ],
+      "python_async": [
+        "revoke_approver"
+      ],
+      "r": [
+        "verdifax_revoke_approver"
+      ]
+    },
     "DELETE /account/keys/{id}": {
       "go": [
         "RevokeAccountKey"
@@ -348,6 +378,23 @@
       ],
       "r": [
         "verdifax_get_account"
+      ]
+    },
+    "GET /account/approvers": {
+      "go": [
+        "ListApprovers"
+      ],
+      "node": [
+        "listApprovers"
+      ],
+      "python": [
+        "list_approvers"
+      ],
+      "python_async": [
+        "list_approvers"
+      ],
+      "r": [
+        "verdifax_list_approvers"
       ]
     },
     "GET /account/keys": {
@@ -455,6 +502,57 @@
       "r": [
         "verdifax_export_account_runs",
         "verdifax_export_account_runs_csv"
+      ]
+    },
+    "GET /account/runs/{id}/signoffs": {
+      "go": [
+        "GetSignOffs"
+      ],
+      "node": [
+        "getSignOffs"
+      ],
+      "python": [
+        "get_signoffs"
+      ],
+      "python_async": [
+        "get_signoffs"
+      ],
+      "r": [
+        "verdifax_get_signoffs"
+      ]
+    },
+    "GET /account/signoffs/history": {
+      "go": [
+        "GetSignOffHistory"
+      ],
+      "node": [
+        "getSignOffHistory"
+      ],
+      "python": [
+        "get_signoff_history"
+      ],
+      "python_async": [
+        "get_signoff_history"
+      ],
+      "r": [
+        "verdifax_get_signoff_history"
+      ]
+    },
+    "GET /account/signoffs/newest": {
+      "go": [
+        "GetNewestSignOff"
+      ],
+      "node": [
+        "getNewestSignOff"
+      ],
+      "python": [
+        "get_newest_signoff"
+      ],
+      "python_async": [
+        "get_newest_signoff"
+      ],
+      "r": [
+        "verdifax_get_newest_signoff"
       ]
     },
     "GET /attestations": {
@@ -870,6 +968,23 @@
         "verdifax_download_audit_pdf"
       ]
     },
+    "GET /runs/{id}/signoffs": {
+      "go": [
+        "GetSignOffs"
+      ],
+      "node": [
+        "getSignOffs"
+      ],
+      "python": [
+        "get_signoffs"
+      ],
+      "python_async": [
+        "get_signoffs"
+      ],
+      "r": [
+        "verdifax_get_signoffs"
+      ]
+    },
     "GET /runs/{id}/verify": {
       "go": [
         "VerifyRun"
@@ -885,6 +1000,23 @@
       ],
       "r": [
         "verdifax_verify_run"
+      ]
+    },
+    "GET /signoffs/newest": {
+      "go": [
+        "GetNewestSignOff"
+      ],
+      "node": [
+        "getNewestSignOff"
+      ],
+      "python": [
+        "get_newest_signoff"
+      ],
+      "python_async": [
+        "get_newest_signoff"
+      ],
+      "r": [
+        "verdifax_get_newest_signoff"
       ]
     },
     "GET /stats": {
@@ -919,6 +1051,23 @@
       ],
       "r": [
         "verdifax_version"
+      ]
+    },
+    "POST /account/approvers": {
+      "go": [
+        "RegisterApprover"
+      ],
+      "node": [
+        "registerApprover"
+      ],
+      "python": [
+        "register_approver"
+      ],
+      "python_async": [
+        "register_approver"
+      ],
+      "r": [
+        "verdifax_register_approver"
       ]
     },
     "POST /account/keys": {
@@ -1004,6 +1153,23 @@
       ],
       "r": [
         "verdifax_register_account_request_key"
+      ]
+    },
+    "POST /account/signoffs": {
+      "go": [
+        "SignOff"
+      ],
+      "node": [
+        "signOff"
+      ],
+      "python": [
+        "sign_off"
+      ],
+      "python_async": [
+        "sign_off"
+      ],
+      "r": [
+        "verdifax_sign_off"
       ]
     },
     "POST /dcae/verify": {
@@ -1155,6 +1321,23 @@
       ],
       "r": [
         "verdifax_activate_policy"
+      ]
+    },
+    "POST /signoffs": {
+      "go": [
+        "SignOff"
+      ],
+      "node": [
+        "signOff"
+      ],
+      "python": [
+        "sign_off"
+      ],
+      "python_async": [
+        "sign_off"
+      ],
+      "r": [
+        "verdifax_sign_off"
       ]
     }
   },
