@@ -555,9 +555,13 @@ class Run(_AliasedModel):
 
 
 class RunSummary(_AliasedModel):
-    """One row of ``GET /runs`` or ``GET /runs/search``."""
+    """One row of ``GET /runs`` or ``GET /runs/search``.
+
+    ``api_key_id`` is the key that requested the run.
+    """
 
     id: int
+    api_key_id: int = 0
     created_at: str = ""
     program_id: str = ""
     route_id: str = ""
@@ -579,9 +583,14 @@ class RunList(_AliasedModel):
 
 
 class ExportRow(_AliasedModel):
-    """One run in an evidence export: what the server stored, not a verdict."""
+    """One run in an evidence export: what the server stored, not a verdict.
+
+    ``api_key_id`` is the key that requested the run, so an account's export
+    can be grouped by key.
+    """
 
     run_id: int
+    api_key_id: int = 0
     created_at: str = ""
     status: str = ""
     error_stage: str = ""
@@ -603,6 +612,14 @@ class RunsExport(_AliasedModel):
     held for the period, ``returned`` the rows in ``runs``, and
     ``truncated`` is ``True`` when the period holds more rows than this
     response. ``by_status`` counts the rows returned.
+
+    ``policy_documents`` and ``policy_history`` are the key's own policy
+    documents, with their exact text, and the chain of its changes, oldest
+    first; they stay empty while the key has no policy document.
+    ``account_id`` is the key's account, such as ``account-7``: a label
+    Verdifax assigned, not a verified company identity.
+    ``account_policy_documents`` and ``account_policy_history`` are the
+    account's, and stay empty while the account has no policy document.
     """
 
     ok: bool = True
@@ -612,6 +629,21 @@ class RunsExport(_AliasedModel):
     truncated: bool = False
     by_status: dict[str, int] = Field(default_factory=dict)
     runs: List[ExportRow] = Field(default_factory=list)
+    policy_documents: List[dict[str, Any]] = Field(default_factory=list)
+    policy_history: List[dict[str, Any]] = Field(default_factory=list)
+    account_id: str = ""
+    account_policy_documents: List[dict[str, Any]] = Field(default_factory=list)
+    account_policy_history: List[dict[str, Any]] = Field(default_factory=list)
+
+
+class AccountRunsExport(RunsExport):
+    """The JSON form of ``GET /account/runs/export``, for an owner key.
+
+    ``runs`` holds the runs every key in the account made through Verdifax,
+    not runs made elsewhere. An owner key has no policy of its own, so
+    ``policy_documents`` and ``policy_history`` stay empty; the account's
+    are in ``account_policy_documents`` and ``account_policy_history``.
+    """
 
 
 class RunsExportCSV(_AliasedModel):
@@ -667,6 +699,7 @@ class ExecuteBatchResponse(_AliasedModel):
 
 
 __all__ = [
+    "AccountRunsExport",
     "AttestationReceipt",
     "AttestedContext",
     "DCAEEngineHint",

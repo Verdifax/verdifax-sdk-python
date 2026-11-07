@@ -127,7 +127,24 @@ asyncio.run(main())
 | `test_policy(inputs, document=None, document_hash=None)` | `POST /policies/test` | required |
 | `get_policy_history()` | `GET /policies/history` | required |
 | `activate_policy(document_hash)` | `GET /policies`, then `POST /policies/{document_hash}/activate` | required |
-| `admin_create_key(name)` | `POST /admin/keys` | admin |
+| `get_account()` | `GET /account` | owner key |
+| `create_account_key(name, expires_at=None)` | `POST /account/keys` | owner key |
+| `list_account_keys()` | `GET /account/keys` | owner key |
+| `revoke_account_key(key_id)` | `DELETE /account/keys/{id}` | owner key |
+| `register_account_request_key()` | `POST /account/request-key` | owner key |
+| `clear_account_request_key()` | `DELETE /account/request-key` | owner key |
+| `list_account_runs(limit, offset)` | `GET /account/runs` | owner key |
+| `export_account_runs(from_, to, job_id)` | `GET /account/runs/export` | owner key |
+| `export_account_runs_csv(from_, to, job_id)` | `GET /account/runs/export?format=csv` | owner key |
+| `upload_account_policy(document)` | `POST /account/policies` | owner key |
+| `list_account_policies()` | `GET /account/policies` | owner key |
+| `get_account_policy(document_hash)` | `GET /account/policies/{document_hash}` | owner key |
+| `test_account_policy(inputs, document=None, document_hash=None)` | `POST /account/policies/test` | owner key |
+| `get_account_policy_history()` | `GET /account/policies/history` | owner key |
+| `activate_account_policy(document_hash)` | `GET /account/policies`, then `POST /account/policies/{document_hash}/activate` | owner key |
+| `admin_create_account(name, tier=None, expires_at=None)` | `POST /admin/accounts` | admin |
+| `admin_list_accounts()` | `GET /admin/accounts` | admin |
+| `admin_create_key(name, account_id=None)` | `POST /admin/keys` | admin |
 | `admin_list_keys()` | `GET /admin/keys` | admin |
 | `admin_revoke_key(key_id)` | `DELETE /admin/keys/{id}` | admin |
 | `admin_clear_request_key(key_id)` | `DELETE /admin/keys/{id}/request-key` | admin |
@@ -359,6 +376,56 @@ Path("policy-history.json").write_text(json.dumps(history), encoding="utf-8")
 ```
 
 `verdifax.policy_activation_approval(signing_key, chain_id, document_hash, previous_activation_hash)` builds the change's `signature` block without sending anything, and `verdifax.policy_activation_preimage(...)` returns the bytes it signs.
+
+## Accounts
+
+An account is a company. Every API key belongs to one account for life. The account's owner key manages the account: it creates and revokes member keys, sets the account's policy and reads the runs of every key in the account. Member keys are the keys that run, and they work as API keys always have.
+
+An owner key cannot run anything. The server refuses it, with 403, on every route that needs an API key other than the `/account` routes.
+
+```python
+from pathlib import Path
+
+import verdifax
+from verdifax import VerdifaxClient
+
+# The admin creates the account and its first owner key.
+admin = VerdifaxClient(api_key="admin key")
+created = admin.admin_create_account("Acme", tier="production")
+print(created["account"]["account_id"])  # for example account-7
+owner_secret = created["owner_key"]["secret"]  # shown this once
+
+# The owner key's request key signs every change to the account's policy.
+owner_signing_key = verdifax.generate_request_key().private_key  # store it as a secret
+owner = VerdifaxClient(api_key=owner_secret, signing_key=owner_signing_key)
+owner.register_account_request_key()
+
+# The owner creates the member keys that run.
+member = owner.create_account_key("payments")
+print(member["secret"])  # shown this once
+
+# The owner stores, tries and activates the account's policy.
+document = Path("account-policy.json").read_bytes().decode("utf-8")
+uploaded = owner.upload_account_policy(document)
+owner.test_account_policy({"verb": "wire-transfer"}, document_hash=uploaded["document_hash"])
+owner.activate_account_policy(uploaded["document_hash"])
+
+# The owner exports the runs of every key in the account.
+evidence = owner.export_account_runs(from_="2026-11-01T00:00:00Z", to="2026-12-01T00:00:00Z")
+print(evidence.account_id, evidence.total, evidence.truncated)
+```
+
+The account number is a label Verdifax assigned, not a verified company identity.
+
+An account policy is your own. Verdifax did not write, review or approve it. Every key in the account must pass the account policy on top of its own, and a run is admitted only when both allow it.
+
+The account policy methods take the same arguments and return the same objects as the [Policies](#policies) methods, on the account's documents. `list_account_policies()` returns the account's chain as `chain_id`, such as `account-7`. `activate_account_policy` reads `GET /account/policies` for that chain and its newest change, and signs the change exactly as `activate_policy` does, with the owner key's request key. The server refuses every unsigned change to an account's policy, so `activate_account_policy` raises `ValidationError` on a client with no `signing_key`, before it sends anything. `get_account_policy_history()` returns the account's changes, oldest first, as the server sent them.
+
+`list_account_runs` and `export_account_runs` cover every key in the account. The account's view covers the runs its keys made through Verdifax, not runs made elsewhere. `export_account_runs` returns an `AccountRunsExport`: the fields of `export_runs` with `account_id`, `account_policy_documents` and `account_policy_history`. `export_account_runs_csv` returns the same rows as raw CSV text, and checks the count headers as `export_runs_csv` does.
+
+`create_account_key(name, expires_at=None)` returns the new key with its `secret`, shown this once. The key takes the account's tier, and a key on a trial account needs a request key before it can run, as every trial key does. `revoke_account_key(key_id)` revokes a member key. For a key outside the account, or an owner key, the server answers 404 and the client raises `APIError`. `clear_account_request_key()` works as `clear_request_key()`: the client then drops its signing key, and the account's policy cannot be changed until the owner registers another request key.
+
+An administrator can put a new customer key in an existing account with `admin_create_key(name, account_id=7)`, where `7` is the number in `account-7`. Without `account_id`, the key gets an account of its own. A key never changes account.
 
 ## Optional execute fields
 

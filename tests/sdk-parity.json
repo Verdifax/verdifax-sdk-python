@@ -34,6 +34,23 @@
         "verdifax_admin_clear_request_key"
       ]
     },
+    "GET /admin/accounts": {
+      "go": [
+        "AdminListAccounts"
+      ],
+      "node": [
+        "adminListAccounts"
+      ],
+      "python": [
+        "admin_list_accounts"
+      ],
+      "python_async": [
+        "admin_list_accounts"
+      ],
+      "r": [
+        "verdifax_admin_list_accounts"
+      ]
+    },
     "GET /admin/keys": {
       "go": [
         "AdminListKeys"
@@ -49,6 +66,23 @@
       ],
       "r": [
         "verdifax_admin_list_keys"
+      ]
+    },
+    "POST /admin/accounts": {
+      "go": [
+        "AdminCreateAccount"
+      ],
+      "node": [
+        "adminCreateAccount"
+      ],
+      "python": [
+        "admin_create_account"
+      ],
+      "python_async": [
+        "admin_create_account"
+      ],
+      "r": [
+        "verdifax_admin_create_account"
       ]
     },
     "POST /admin/erase": {
@@ -248,6 +282,40 @@
     "AsyncVerdifaxClient.verify"
   ],
   "routes": {
+    "DELETE /account/keys/{id}": {
+      "go": [
+        "RevokeAccountKey"
+      ],
+      "node": [
+        "revokeAccountKey"
+      ],
+      "python": [
+        "revoke_account_key"
+      ],
+      "python_async": [
+        "revoke_account_key"
+      ],
+      "r": [
+        "verdifax_revoke_account_key"
+      ]
+    },
+    "DELETE /account/request-key": {
+      "go": [
+        "ClearAccountRequestKey"
+      ],
+      "node": [
+        "clearAccountRequestKey"
+      ],
+      "python": [
+        "clear_account_request_key"
+      ],
+      "python_async": [
+        "clear_account_request_key"
+      ],
+      "r": [
+        "verdifax_clear_account_request_key"
+      ]
+    },
     "DELETE /keys/request-key": {
       "go": [
         "ClearRequestKey"
@@ -263,6 +331,130 @@
       ],
       "r": [
         "verdifax_clear_request_key"
+      ]
+    },
+    "GET /account": {
+      "go": [
+        "GetAccount"
+      ],
+      "node": [
+        "getAccount"
+      ],
+      "python": [
+        "get_account"
+      ],
+      "python_async": [
+        "get_account"
+      ],
+      "r": [
+        "verdifax_get_account"
+      ]
+    },
+    "GET /account/keys": {
+      "go": [
+        "ListAccountKeys"
+      ],
+      "node": [
+        "listAccountKeys"
+      ],
+      "python": [
+        "list_account_keys"
+      ],
+      "python_async": [
+        "list_account_keys"
+      ],
+      "r": [
+        "verdifax_list_account_keys"
+      ]
+    },
+    "GET /account/policies": {
+      "go": [
+        "ListAccountPolicies"
+      ],
+      "node": [
+        "listAccountPolicies"
+      ],
+      "python": [
+        "list_account_policies"
+      ],
+      "python_async": [
+        "list_account_policies"
+      ],
+      "r": [
+        "verdifax_list_account_policies"
+      ]
+    },
+    "GET /account/policies/history": {
+      "go": [
+        "GetAccountPolicyHistory"
+      ],
+      "node": [
+        "getAccountPolicyHistory"
+      ],
+      "python": [
+        "get_account_policy_history"
+      ],
+      "python_async": [
+        "get_account_policy_history"
+      ],
+      "r": [
+        "verdifax_get_account_policy_history"
+      ]
+    },
+    "GET /account/policies/{document_hash}": {
+      "go": [
+        "GetAccountPolicy"
+      ],
+      "node": [
+        "getAccountPolicy"
+      ],
+      "python": [
+        "get_account_policy"
+      ],
+      "python_async": [
+        "get_account_policy"
+      ],
+      "r": [
+        "verdifax_get_account_policy"
+      ]
+    },
+    "GET /account/runs": {
+      "go": [
+        "ListAccountRuns"
+      ],
+      "node": [
+        "listAccountRuns"
+      ],
+      "python": [
+        "list_account_runs"
+      ],
+      "python_async": [
+        "list_account_runs"
+      ],
+      "r": [
+        "verdifax_list_account_runs"
+      ]
+    },
+    "GET /account/runs/export": {
+      "go": [
+        "ExportAccountRuns",
+        "ExportAccountRunsCSV"
+      ],
+      "node": [
+        "exportAccountRuns",
+        "exportAccountRunsCSV"
+      ],
+      "python": [
+        "export_account_runs",
+        "export_account_runs_csv"
+      ],
+      "python_async": [
+        "export_account_runs",
+        "export_account_runs_csv"
+      ],
+      "r": [
+        "verdifax_export_account_runs",
+        "verdifax_export_account_runs_csv"
       ]
     },
     "GET /attestations": {
@@ -727,6 +919,91 @@
       ],
       "r": [
         "verdifax_version"
+      ]
+    },
+    "POST /account/keys": {
+      "go": [
+        "CreateAccountKey"
+      ],
+      "node": [
+        "createAccountKey"
+      ],
+      "python": [
+        "create_account_key"
+      ],
+      "python_async": [
+        "create_account_key"
+      ],
+      "r": [
+        "verdifax_create_account_key"
+      ]
+    },
+    "POST /account/policies": {
+      "go": [
+        "UploadAccountPolicy"
+      ],
+      "node": [
+        "uploadAccountPolicy"
+      ],
+      "python": [
+        "upload_account_policy"
+      ],
+      "python_async": [
+        "upload_account_policy"
+      ],
+      "r": [
+        "verdifax_upload_account_policy"
+      ]
+    },
+    "POST /account/policies/test": {
+      "go": [
+        "TestAccountPolicy"
+      ],
+      "node": [
+        "testAccountPolicy"
+      ],
+      "python": [
+        "test_account_policy"
+      ],
+      "python_async": [
+        "test_account_policy"
+      ],
+      "r": [
+        "verdifax_test_account_policy"
+      ]
+    },
+    "POST /account/policies/{document_hash}/activate": {
+      "go": [
+        "ActivateAccountPolicy"
+      ],
+      "node": [
+        "activateAccountPolicy"
+      ],
+      "python": [
+        "activate_account_policy"
+      ],
+      "python_async": [
+        "activate_account_policy"
+      ],
+      "r": [
+        "verdifax_activate_account_policy"
+      ]
+    },
+    "POST /account/request-key": {
+      "go": [
+        "RegisterAccountRequestKey"
+      ],
+      "node": [
+        "registerAccountRequestKey"
+      ],
+      "python": [
+        "register_account_request_key"
+      ],
+      "python_async": [
+        "register_account_request_key"
+      ],
+      "r": [
+        "verdifax_register_account_request_key"
       ]
     },
     "POST /dcae/verify": {

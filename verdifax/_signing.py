@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 REQUEST_KEY_PATH = "/keys/request-key"
+# An account owner key registers its own request key here, with the same body.
+ACCOUNT_REQUEST_KEY_PATH = "/account/request-key"
 _REQUEST_SIGNATURE_FORM = "verdifax.request.v1"
 _REQUEST_SIGNATURE_FORM_V2 = "verdifax.request.v2"
 _REQUEST_SIGNATURE_VERSION = "2"
@@ -187,7 +189,9 @@ def policy_activation_preimage(
 
     ``chain_id`` comes from ``GET /policies``, as does
     ``previous_activation_hash``, the newest change in that chain (64 zeros
-    before the first). Matches the orchestrator's ``PolicyActivationPreimage``.
+    before the first). An account's policy change uses the same bytes, with
+    both values from ``GET /account/policies`` (a chain like ``account-7``).
+    Matches the orchestrator's ``PolicyActivationPreimage``.
 
     Raises:
         ValidationError: If a value is not text or holds a zero byte, which
@@ -332,10 +336,16 @@ def attach_signature(key: "Optional[Ed25519PrivateKey]", body: dict[str, Any]) -
     return sign_envelope(key, body)
 
 
-def request_key_body(key: "Optional[Ed25519PrivateKey]") -> dict[str, str]:
-    """The body of ``POST /keys/request-key``: the public key and its proof."""
+def request_key_body(
+    key: "Optional[Ed25519PrivateKey]", method: str = "register_request_key"
+) -> dict[str, str]:
+    """The body of ``POST /keys/request-key``: the public key and its proof.
+
+    ``POST /account/request-key`` takes the same body. ``method`` names the
+    caller in the error.
+    """
     if key is None:
-        raise ValidationError("register_request_key needs a client with a signing_key")
+        raise ValidationError(f"{method} needs a client with a signing_key")
     public_key = base64.b64encode(key.public_key().public_bytes_raw()).decode("ascii")
     proof = key.sign(f"{_REQUEST_KEY_PROOF_FORM}\x00{public_key}".encode("utf-8"))
     return {"public_key": public_key, "proof": base64.b64encode(proof).decode("ascii")}
@@ -393,8 +403,10 @@ def policy_activation_approval(
 
     The request key approves making ``document_hash`` the policy in force,
     after ``previous_activation_hash`` in the chain ``chain_id``. Both come
-    from ``GET /policies``. A client with a ``signing_key`` does this itself
-    in ``activate_policy``. ``signed_at`` and ``nonce`` default to the current
+    from ``GET /policies``, or from ``GET /account/policies`` for the block
+    of ``POST /account/policies/{document_hash}/activate``. A client with a
+    ``signing_key`` does this itself in ``activate_policy`` and
+    ``activate_account_policy``. ``signed_at`` and ``nonce`` default to the current
     time and fresh random bytes. A nonce the server has already seen is
     refused.
 
@@ -434,6 +446,7 @@ def request_key_clear_body(key: "Optional[Ed25519PrivateKey]") -> Optional[dict[
 
 
 __all__ = [
+    "ACCOUNT_REQUEST_KEY_PATH",
     "REQUEST_KEY_PATH",
     "RequestKeyPair",
     "attach_signature",

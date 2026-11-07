@@ -23,10 +23,17 @@ from urllib.parse import quote
 import httpx
 
 from ._requests import (
+    ACCOUNT_PATH,
+    ACCOUNT_POLICIES_PATH,
     POLICIES_PATH,
     BatchRow,
+    account_key_body,
+    account_key_path,
     activation_record,
+    admin_account_body,
+    admin_accounts,
     admin_erase_body,
+    admin_key_body,
     apply_policy_fields,
     attest_receipt,
     batch_body,
@@ -40,11 +47,13 @@ from ._requests import (
     provider_attest_args,
     query_params,
     refuse_origin_hashes,
+    refuse_unsigned_account_change,
     reproducibility_block,
     run_path,
 )
 from ._retry import DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY, RetryingClient
 from ._signing import (
+    ACCOUNT_REQUEST_KEY_PATH,
     REQUEST_KEY_PATH,
     attach_signature,
     load_signing_key,
@@ -65,6 +74,7 @@ from ._version import __version__
 from .exceptions import UnsupportedOperationError, ValidationError
 from .jobs import Job
 from .models import (
+    AccountRunsExport,
     AttestationReceipt,
     AttestedContext,
     ExecuteBatchResponse,
@@ -132,8 +142,9 @@ class VerdifaxClient:
         signing_key: Optional 32 raw bytes of an Ed25519 private key. When
             set, every call to ``POST /execute`` is sent as signed text with
             a request signature, each row of a batch carries its own, and a
-            determinism check carries one. ``activate_policy`` sends the
-            key's approval of the change. Needs
+            determinism check carries one. ``activate_policy`` and
+            ``activate_account_policy`` send the key's approval of the
+            change. Needs
             ``pip install "verdifax[signing]"``. The key is never sent to the
             server.
     """
@@ -870,11 +881,272 @@ class VerdifaxClient:
         body = policy_activation_body(self._signing_key, self.list_policies(), document_hash)
         return activation_record(self._send_json("POST", path, body))
 
-    def admin_create_key(self, name: str) -> dict[str, Any]:
-        """Create an API key. The response holds its secret once."""
-        if not name:
-            raise ValidationError("name is required")
-        return self._send_json("POST", "/admin/keys", {"name": name})
+    # ── account (owner key) ────────────────────────────────────────────────
+    # An account is a company. Every API key belongs to one account for life.
+    # These methods need the account's owner key, which manages the account
+    # and cannot run anything: the server refuses it (403) on every other
+    # route that needs an API key. The account number is a label Verdifax
+    # assigned, not a verified company identity.
+    def get_account(self) -> dict[str, Any]:
+        """The owner key's account, from ``GET /account``.
+
+        Returns:
+            The server's object: ``ok``, ``account_id`` (such as
+            ``account-7``), ``id``, ``name``, ``tier``, ``created_at``,
+            ``member_keys``, ``owner_keys`` and ``chain_id``, the chain of
+            the account's policy changes.
+        """
+        return self._get_json(ACCOUNT_PATH)
+
+    def create_account_key(self, name: str, expires_at: Optional[str] = None) -> dict[str, Any]:
+        """Create a member key in the account with ``POST /account/keys``.
+
+        The key takes the account's tier and stays in this account for life.
+        On a trial account it needs a request key before it can run, as
+        every trial key does.
+
+        Args:
+            name: The key's name.
+            expires_at: Optional cutoff, RFC 3339 or ``YYYY-MM-DD``.
+
+        Returns:
+            The key with ``secret``, which is shown this once, and
+            ``request_key_required``.
+
+        Raises:
+            ValidationError: If ``name`` is empty, or ``expires_at`` is not a
+                ``str``.
+            APIError: For a non-2xx response.
+            ConnectionError: If the API was unreachable.
+        """
+        return self._send_json("POST", f"{ACCOUNT_PATH}/keys", account_key_body(name, expires_at))
+
+    def list_account_keys(self) -> dict[str, Any]:
+        """The account's keys, without their secrets, from ``GET /account/keys``.
+
+        Returns:
+            The server's object: ``ok``, ``account_id`` and ``keys``. Each key
+            has ``owner``, ``run_count``, ``revoked`` and, when it has one,
+            ``expires_at``.
+        """
+        return self._get_json(f"{ACCOUNT_PATH}/keys")
+
+    def revoke_account_key(self, key_id: int) -> dict[str, Any]:
+        """Revoke one of the account's member keys with ``DELETE /account/keys/{id}``.
+
+        Raises:
+            ValidationError: If ``key_id`` is not a positive integer.
+            APIError: For a non-2xx response, for example 404 for a key
+                outside the account or an owner key.
+            ConnectionError: If the API was unreachable.
+        """
+        return self._send_json("DELETE", account_key_path(key_id))
+
+    def register_account_request_key(self) -> dict[str, Any]:
+        """Register this client's public key on the owner key.
+
+        Sends ``POST /account/request-key`` with the same body as
+        :meth:`register_request_key`. The owner key's request key signs every
+        change to the account's policy.
+
+        Raises:
+            ValidationError: If this client has no ``signing_key``.
+            APIError: For a non-2xx response.
+            ConnectionError: If the API was unreachable.
+        """
+        body = request_key_body(self._signing_key, "register_account_request_key")
+        return self._send_json("POST", ACCOUNT_REQUEST_KEY_PATH, body)
+
+    def clear_account_request_key(self) -> dict[str, Any]:
+        """Clear the owner key's request key with ``DELETE /account/request-key``.
+
+        Works as :meth:`clear_request_key`: with a ``signing_key`` the current
+        key approves the clear, and after success this client drops its
+        signing key. Until another request key is registered, the account's
+        policy cannot be changed.
+        """
+        result = self._send_json(
+            "DELETE", ACCOUNT_REQUEST_KEY_PATH, request_key_clear_body(self._signing_key)
+        )
+        self._signing_key = None
+        return result
+
+    def list_account_runs(
+        self, limit: Optional[int] = None, offset: Optional[int] = None
+    ) -> RunList:
+        """List the runs of every key in the account from ``GET /account/runs``.
+
+        The server caps ``limit`` at 500. The list covers the runs the
+        account's keys made through Verdifax, not runs made elsewhere.
+        """
+        params = query_params(limit=limit, offset=offset)
+        return RunList.model_validate(self._get_json(f"{ACCOUNT_PATH}/runs", params))
+
+    def export_account_runs(
+        self,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> AccountRunsExport:
+        """Export the account's runs in a period with ``GET /account/runs/export``.
+
+        Takes the same arguments as :meth:`export_runs` and covers every key
+        in the account. The answer adds ``account_id``,
+        ``account_policy_documents`` and ``account_policy_history``. It
+        states what was stored, not a verdict, and covers the runs the
+        account's keys made through Verdifax, not runs made elsewhere.
+
+        Raises:
+            APIError: For a non-2xx response, for example 400 for a time the
+                server cannot parse.
+            ConnectionError: If the API was unreachable.
+        """
+        params = query_params(format="json", job_id=job_id, **{"from": from_, "to": to})
+        body = self._get_json(f"{ACCOUNT_PATH}/runs/export", params)
+        return AccountRunsExport.model_validate(body)
+
+    def export_account_runs_csv(
+        self,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> RunsExportCSV:
+        """The same rows as :meth:`export_account_runs`, as raw CSV text with its counts.
+
+        Raises:
+            VerdifaxError: If the server does not send the count headers, so
+                that a cut-off export cannot pass for a complete one.
+            APIError: For a non-2xx response.
+            ConnectionError: If the API was unreachable.
+        """
+        params = query_params(format="csv", job_id=job_id, **{"from": from_, "to": to})
+        return parse_export_csv(
+            self._get(f"{ACCOUNT_PATH}/runs/export", params), "export_account_runs"
+        )
+
+    def upload_account_policy(self, document: str) -> dict[str, Any]:
+        """Store an account policy document with ``POST /account/policies``.
+
+        Works as :meth:`upload_policy`. It changes nothing until it is
+        activated. An account policy is the customer's own: Verdifax did not
+        write, review or approve it.
+        """
+        return self._send_json("POST", ACCOUNT_POLICIES_PATH, policy_upload_body(document))
+
+    def list_account_policies(self) -> dict[str, Any]:
+        """List the account's policy documents with ``GET /account/policies``.
+
+        Returns:
+            The same object as :meth:`list_policies`, with ``chain_id`` the
+            account's chain, such as ``account-7``.
+        """
+        return self._get_json(ACCOUNT_POLICIES_PATH)
+
+    def test_account_policy(
+        self,
+        inputs: Mapping[str, Any],
+        document: Optional[str] = None,
+        document_hash: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Show which rule would fire on sample inputs, with ``POST /account/policies/test``.
+
+        Works as :meth:`test_policy`, on the account's documents. It seals
+        nothing.
+        """
+        body = policy_test_body(inputs, document, document_hash)
+        return self._send_json("POST", f"{ACCOUNT_POLICIES_PATH}/test", body)
+
+    def get_account_policy_history(self) -> list[dict[str, Any]]:
+        """The chain of the account's policy changes, oldest first.
+
+        Calls ``GET /account/policies/history`` and returns the list as the
+        server sent it.
+
+        Raises:
+            VerdifaxError: If the server did not send a list.
+            APIError: For a non-2xx response.
+            ConnectionError: If the API was unreachable.
+        """
+        return policy_history(parse_response(self._get(f"{ACCOUNT_POLICIES_PATH}/history")))
+
+    def get_account_policy(self, document_hash: str) -> dict[str, Any]:
+        """Read one of the account's documents with ``GET /account/policies/{document_hash}``.
+
+        Raises:
+            ValidationError: If ``document_hash`` is not 64 lowercase hex
+                characters.
+            APIError: For a non-2xx response, for example 404.
+            ConnectionError: If the API was unreachable.
+        """
+        return self._get_json(policy_path(document_hash, base=ACCOUNT_POLICIES_PATH))
+
+    def activate_account_policy(self, document_hash: str) -> dict[str, Any]:
+        """Make a stored account document the account's policy in force.
+
+        Reads ``GET /account/policies`` for the account's chain and its
+        newest change, then sends ``POST /account/policies/{document_hash}/activate``
+        signed by this client's ``signing_key``, the owner key's request key,
+        exactly as :meth:`activate_policy` signs. Every key in the account
+        must then pass this policy on top of its own, and a run is admitted
+        only when both allow it.
+
+        Returns:
+            The ``activation`` object: the change record.
+
+        Raises:
+            ValidationError: If ``document_hash`` is not 64 lowercase hex
+                characters, or this client has no ``signing_key``: the server
+                refuses an unsigned account policy change.
+            APIError: For a non-2xx response. A 409 is not retried.
+            VerdifaxError: If ``GET /account/policies`` gave no newest change
+                or no ``chain_id``.
+            ConnectionError: If the API was unreachable.
+        """
+        path = policy_path(document_hash, "/activate", ACCOUNT_POLICIES_PATH)
+        refuse_unsigned_account_change(self._signing_key)
+        listing = self.list_account_policies()
+        body = policy_activation_body(
+            self._signing_key, listing, document_hash, f"GET {ACCOUNT_POLICIES_PATH}"
+        )
+        return activation_record(self._send_json("POST", path, body))
+
+    def admin_create_account(
+        self, name: str, tier: Optional[str] = None, expires_at: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Create an account and its first owner key with ``POST /admin/accounts``.
+
+        Args:
+            name: The account's name.
+            tier: ``trial`` (the server's default) or ``production``.
+            expires_at: Optional cutoff for the owner key, RFC 3339 or
+                ``YYYY-MM-DD``.
+
+        Returns:
+            The server's object: ``ok``, ``account`` (as :meth:`get_account`)
+            and ``owner_key`` (as :meth:`create_account_key`, with its
+            ``secret`` shown this once).
+        """
+        body = admin_account_body(name, tier, expires_at)
+        return self._send_json("POST", "/admin/accounts", body)
+
+    def admin_list_accounts(self) -> list[dict[str, Any]]:
+        """List every account with its key counts, from ``GET /admin/accounts``."""
+        return admin_accounts(self._get_json("/admin/accounts"))
+
+    def admin_create_key(self, name: str, account_id: Optional[int] = None) -> dict[str, Any]:
+        """Create an API key. The response holds its secret once.
+
+        Args:
+            name: The key's name.
+            account_id: Optional number of an existing account (``7`` for
+                ``account-7``) to put this customer key in. Without it the
+                key gets an account of its own. A key never changes account.
+
+        Raises:
+            ValidationError: If ``name`` is empty or ``account_id`` is not a
+                positive integer.
+        """
+        return self._send_json("POST", "/admin/keys", admin_key_body(name, account_id))
 
     def admin_list_keys(self) -> list[dict[str, Any]]:
         """List the API keys in the deployment, without their secrets."""

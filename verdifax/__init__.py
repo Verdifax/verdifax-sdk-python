@@ -67,6 +67,7 @@ from .models import (
     KERNEL_NAMES,
     RUN_STATUSES,
     STAGE_NAMES,
+    AccountRunsExport,
     AttestationReceipt,
     AttestedContext,
     DCAEEngineHint,
@@ -227,6 +228,7 @@ def verify(
 
 __all__ = [
     "APIError",
+    "AccountRunsExport",
     "AsyncJob",
     "AsyncVerdifaxClient",
     "AttestationReceipt",

@@ -362,8 +362,11 @@ class DeterminismResultRow(BaseModel):
     manifest_hash: Optional[str] = None
     bundle_hash: Optional[str] = None
     duration_ms: int
+    #: ``ok``, ``stage_error``, or the refusal or halt kind, such as ``pepg_deny``.
     status: str
     error: Optional[str] = None
+    #: The sealed receipt of a refused or halted run; its manifest hash covers it.
+    receipt: Optional[dict[str, Any]] = None
 
 
 class DeterminismDiff(BaseModel):
@@ -375,6 +378,8 @@ class DeterminismDiff(BaseModel):
     manifest_hash_differs: bool
     bundle_hash_differs: bool
     differing_fields: List[str] = Field(default_factory=list)
+    #: Why there is no verdict, when neither run sealed a record.
+    reason: Optional[str] = None
 
 
 class DeterminismResult(BaseModel):

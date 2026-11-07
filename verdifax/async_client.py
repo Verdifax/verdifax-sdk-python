@@ -27,10 +27,17 @@ from urllib.parse import quote
 import httpx
 
 from ._requests import (
+    ACCOUNT_PATH,
+    ACCOUNT_POLICIES_PATH,
     POLICIES_PATH,
     BatchRow,
+    account_key_body,
+    account_key_path,
     activation_record,
+    admin_account_body,
+    admin_accounts,
     admin_erase_body,
+    admin_key_body,
     attest_receipt,
     batch_body,
     batch_response,
@@ -42,10 +49,12 @@ from ._requests import (
     policy_upload_body,
     provider_attest_args,
     query_params,
+    refuse_unsigned_account_change,
     run_path,
 )
 from ._retry import AsyncRetryingClient, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY
 from ._signing import (
+    ACCOUNT_REQUEST_KEY_PATH,
     REQUEST_KEY_PATH,
     attach_signature,
     load_signing_key,
@@ -70,6 +79,7 @@ from .client import (
 from .exceptions import UnsupportedOperationError, ValidationError
 from .jobs import AsyncJob
 from .models import (
+    AccountRunsExport,
     AttestationReceipt,
     AttestedContext,
     ExecuteBatchResponse,
@@ -102,8 +112,9 @@ class AsyncVerdifaxClient:
         signing_key: Optional 32 raw bytes of an Ed25519 private key. When
             set, every call to ``POST /execute`` is sent as signed text with
             a request signature, each row of a batch carries its own, and a
-            determinism check carries one. ``activate_policy`` sends the
-            key's approval of the change. Needs
+            determinism check carries one. ``activate_policy`` and
+            ``activate_account_policy`` send the key's approval of the
+            change. Needs
             ``pip install "verdifax[signing]"``. The key is never sent to the
             server.
     """
@@ -581,11 +592,124 @@ class AsyncVerdifaxClient:
         body = policy_activation_body(self._signing_key, listing, document_hash)
         return activation_record(await self._send_json("POST", path, body))
 
-    async def admin_create_key(self, name: str) -> dict[str, Any]:
+    # ── account (owner key) ────────────────────────────────────────────────
+    async def get_account(self) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.get_account`."""
+        return await self._get_json(ACCOUNT_PATH)
+
+    async def create_account_key(
+        self, name: str, expires_at: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.create_account_key`."""
+        body = account_key_body(name, expires_at)
+        return await self._send_json("POST", f"{ACCOUNT_PATH}/keys", body)
+
+    async def list_account_keys(self) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.list_account_keys`."""
+        return await self._get_json(f"{ACCOUNT_PATH}/keys")
+
+    async def revoke_account_key(self, key_id: int) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.revoke_account_key`."""
+        return await self._send_json("DELETE", account_key_path(key_id))
+
+    async def register_account_request_key(self) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.register_account_request_key`."""
+        body = request_key_body(self._signing_key, "register_account_request_key")
+        return await self._send_json("POST", ACCOUNT_REQUEST_KEY_PATH, body)
+
+    async def clear_account_request_key(self) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.clear_account_request_key`."""
+        result = await self._send_json(
+            "DELETE", ACCOUNT_REQUEST_KEY_PATH, request_key_clear_body(self._signing_key)
+        )
+        self._signing_key = None
+        return result
+
+    async def list_account_runs(
+        self, limit: Optional[int] = None, offset: Optional[int] = None
+    ) -> RunList:
+        """Async version of :meth:`VerdifaxClient.list_account_runs`."""
+        params = query_params(limit=limit, offset=offset)
+        return RunList.model_validate(await self._get_json(f"{ACCOUNT_PATH}/runs", params))
+
+    async def export_account_runs(
+        self,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> AccountRunsExport:
+        """Async version of :meth:`VerdifaxClient.export_account_runs`."""
+        params = query_params(format="json", job_id=job_id, **{"from": from_, "to": to})
+        body = await self._get_json(f"{ACCOUNT_PATH}/runs/export", params)
+        return AccountRunsExport.model_validate(body)
+
+    async def export_account_runs_csv(
+        self,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> RunsExportCSV:
+        """Async version of :meth:`VerdifaxClient.export_account_runs_csv`."""
+        params = query_params(format="csv", job_id=job_id, **{"from": from_, "to": to})
+        return parse_export_csv(
+            await self._get(f"{ACCOUNT_PATH}/runs/export", params), "export_account_runs"
+        )
+
+    async def upload_account_policy(self, document: str) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.upload_account_policy`."""
+        return await self._send_json("POST", ACCOUNT_POLICIES_PATH, policy_upload_body(document))
+
+    async def list_account_policies(self) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.list_account_policies`."""
+        return await self._get_json(ACCOUNT_POLICIES_PATH)
+
+    async def test_account_policy(
+        self,
+        inputs: Mapping[str, Any],
+        document: Optional[str] = None,
+        document_hash: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.test_account_policy`. It seals nothing."""
+        body = policy_test_body(inputs, document, document_hash)
+        return await self._send_json("POST", f"{ACCOUNT_POLICIES_PATH}/test", body)
+
+    async def get_account_policy_history(self) -> list[dict[str, Any]]:
+        """Async version of :meth:`VerdifaxClient.get_account_policy_history`."""
+        response = await self._get(f"{ACCOUNT_POLICIES_PATH}/history")
+        return policy_history(parse_response(response))
+
+    async def get_account_policy(self, document_hash: str) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.get_account_policy`."""
+        return await self._get_json(policy_path(document_hash, base=ACCOUNT_POLICIES_PATH))
+
+    async def activate_account_policy(self, document_hash: str) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.activate_account_policy`.
+
+        The owner key's request key signs the change. A 409 raises
+        :class:`APIError` and is not retried.
+        """
+        path = policy_path(document_hash, "/activate", ACCOUNT_POLICIES_PATH)
+        refuse_unsigned_account_change(self._signing_key)
+        listing = await self.list_account_policies()
+        body = policy_activation_body(
+            self._signing_key, listing, document_hash, f"GET {ACCOUNT_POLICIES_PATH}"
+        )
+        return activation_record(await self._send_json("POST", path, body))
+
+    async def admin_create_account(
+        self, name: str, tier: Optional[str] = None, expires_at: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.admin_create_account`."""
+        body = admin_account_body(name, tier, expires_at)
+        return await self._send_json("POST", "/admin/accounts", body)
+
+    async def admin_list_accounts(self) -> list[dict[str, Any]]:
+        """Async version of :meth:`VerdifaxClient.admin_list_accounts`."""
+        return admin_accounts(await self._get_json("/admin/accounts"))
+
+    async def admin_create_key(self, name: str, account_id: Optional[int] = None) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.admin_create_key`."""
-        if not name:
-            raise ValidationError("name is required")
-        return await self._send_json("POST", "/admin/keys", {"name": name})
+        return await self._send_json("POST", "/admin/keys", admin_key_body(name, account_id))
 
     async def admin_list_keys(self) -> list[dict[str, Any]]:
         """Async version of :meth:`VerdifaxClient.admin_list_keys`."""

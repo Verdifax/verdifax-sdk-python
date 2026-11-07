@@ -221,8 +221,10 @@ def run_path(run_id: int, suffix: str = "") -> str:
     return f"/runs/{run_id}{suffix}"
 
 
-def parse_export_csv(response: httpx.Response) -> RunsExportCSV:
+def parse_export_csv(response: httpx.Response, json_method: str = "export_runs") -> RunsExportCSV:
     """Read a CSV export with its counts.
+
+    ``json_method`` names the JSON form to use instead, in the error.
 
     Raises:
         VerdifaxError: If the server does not report the counts, so that a
@@ -234,7 +236,7 @@ def parse_export_csv(response: httpx.Response) -> RunsExportCSV:
     if not total.isdecimal() or truncated not in ("true", "false"):
         raise VerdifaxError(
             f"the server did not report {_HEADER_EXPORT_TOTAL} and "
-            f"{_HEADER_EXPORT_TRUNCATED}, so this CSV may be cut off; use export_runs instead"
+            f"{_HEADER_EXPORT_TRUNCATED}, so this CSV may be cut off; use {json_method} instead"
         )
     return RunsExportCSV(csv=response.text, total=int(total), truncated=truncated == "true")
 
@@ -258,12 +260,19 @@ def admin_erase_body(
 
 
 POLICIES_PATH = "/policies"
+# The account's policies: the same bodies and answers as the key's, under
+# the owner key.
+ACCOUNT_POLICIES_PATH = "/account/policies"
 
 
-def policy_path(document_hash: str, suffix: str = "") -> str:
-    """Validate ``document_hash`` and build ``/policies/{document_hash}``."""
+def policy_path(document_hash: str, suffix: str = "", base: str = POLICIES_PATH) -> str:
+    """Validate ``document_hash`` and build ``{base}/{document_hash}``.
+
+    ``base`` is ``/policies`` for the key's own policies, or
+    ``/account/policies`` for the account's.
+    """
     validate_hex64(document_hash, "document_hash")
-    return f"{POLICIES_PATH}/{document_hash}{suffix}"
+    return f"{base}/{document_hash}{suffix}"
 
 
 def _policy_document(document: Any) -> str:
@@ -325,12 +334,17 @@ def policy_history(body: Any) -> list[dict[str, Any]]:
 
 
 def policy_activation_body(
-    key: "Optional[Ed25519PrivateKey]", listing: Mapping[str, Any], document_hash: str
+    key: "Optional[Ed25519PrivateKey]",
+    listing: Mapping[str, Any],
+    document_hash: str,
+    source: str = f"GET {POLICIES_PATH}",
 ) -> dict[str, Any]:
     """The body of ``POST /policies/{document_hash}/activate``.
 
     ``listing`` is the answer of ``GET /policies``. With a key, the body
-    carries its approval of the change.
+    carries its approval of the change. An account's change takes the same
+    body, built from ``GET /account/policies``; ``source`` names the route
+    the listing came from in the error.
 
     Raises:
         VerdifaxError: If the listing has no usable newest change, or, with a
@@ -340,13 +354,13 @@ def policy_activation_body(
     try:
         validate_hex64(previous, "newest_activation_hash")
     except ValidationError as exc:
-        raise VerdifaxError(f"GET /policies did not return a usable newest change: {exc}") from exc
+        raise VerdifaxError(f"{source} did not return a usable newest change: {exc}") from exc
     body: dict[str, Any] = {"previous_activation_hash": previous}
     if key is None:
         return body
     chain_id = listing.get("chain_id")
     if not isinstance(chain_id, str) or not chain_id:
-        raise VerdifaxError("GET /policies returned no chain_id, so the change cannot be signed")
+        raise VerdifaxError(f"{source} returned no chain_id, so the change cannot be signed")
     body["signature"] = policy_activation_signature(key, chain_id, document_hash, previous)
     return body
 
@@ -361,6 +375,115 @@ def activation_record(response_body: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(record, dict):
         raise VerdifaxError("the server's answer has no activation record")
     return record
+
+
+ACCOUNT_PATH = "/account"
+
+
+def _account_name(name: Any) -> str:
+    """Refuse an empty name. The server checks its length, at most 200 bytes."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValidationError("name is required")
+    return name
+
+
+def _optional_text(value: Any, field_name: str) -> None:
+    if value is not None and not isinstance(value, str):
+        raise ValidationError(f"{field_name} must be a str, got {type(value).__name__}")
+
+
+def account_key_body(name: str, expires_at: Optional[str] = None) -> dict[str, str]:
+    """The body of ``POST /account/keys``.
+
+    ``expires_at`` is RFC 3339 or ``YYYY-MM-DD``, and the server checks it.
+
+    Raises:
+        ValidationError: If ``name`` is empty, or ``expires_at`` is not a
+            ``str``.
+    """
+    body = {"name": _account_name(name)}
+    _optional_text(expires_at, "expires_at")
+    if expires_at:
+        body["expires_at"] = expires_at
+    return body
+
+
+def admin_account_body(
+    name: str, tier: Optional[str] = None, expires_at: Optional[str] = None
+) -> dict[str, str]:
+    """The body of ``POST /admin/accounts``.
+
+    ``tier`` is ``trial`` (the server's default) or ``production``, and the
+    server checks it, as it does ``expires_at``.
+
+    Raises:
+        ValidationError: If ``name`` is empty, or ``tier`` or ``expires_at``
+            is not a ``str``.
+    """
+    body = {"name": _account_name(name)}
+    _optional_text(tier, "tier")
+    _optional_text(expires_at, "expires_at")
+    if tier:
+        body["tier"] = tier
+    if expires_at:
+        body["expires_at"] = expires_at
+    return body
+
+
+def admin_key_body(name: str, account_id: Optional[int] = None) -> dict[str, Any]:
+    """The body of ``POST /admin/keys``.
+
+    ``account_id`` is the number of an existing account, the ``id`` of
+    ``POST /admin/accounts`` (``7`` for ``account-7``). Without it the server
+    gives the key an account of its own. A key never changes account.
+
+    Raises:
+        ValidationError: If ``name`` is empty, or ``account_id`` is not a
+            positive ``int``.
+    """
+    if not name:
+        raise ValidationError("name is required")
+    body: dict[str, Any] = {"name": name}
+    if account_id is not None:
+        validate_positive_id(account_id, "account_id")
+        body["account_id"] = account_id
+    return body
+
+
+def account_key_path(key_id: int) -> str:
+    """Validate ``key_id`` and build ``/account/keys/{key_id}``."""
+    validate_positive_id(key_id, "key_id")
+    return f"{ACCOUNT_PATH}/keys/{key_id}"
+
+
+def refuse_unsigned_account_change(key: "Optional[Ed25519PrivateKey]") -> None:
+    """Refuse an account policy change from a client with no signing key.
+
+    The server refuses every unsigned change to an account's policy (403),
+    because that policy binds every key in the account.
+
+    Raises:
+        ValidationError: If ``key`` is ``None``.
+    """
+    if key is None:
+        raise ValidationError(
+            "activate_account_policy needs a client with a signing_key: the owner key's "
+            "request key must sign every change to the account's policy"
+        )
+
+
+def admin_accounts(body: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The list of ``GET /admin/accounts``.
+
+    Raises:
+        VerdifaxError: If the server did not send a list.
+    """
+    accounts = body.get("accounts")
+    if accounts is None:
+        return []
+    if not isinstance(accounts, list):
+        raise VerdifaxError("the server's account list is not a list")
+    return accounts
 
 
 def format_provider_payload(provider: str, prompt: str, response: Union[str, bytes]) -> str:
@@ -431,11 +554,18 @@ def governed_text(response: Union[str, bytes]) -> str:
 
 
 __all__ = [
+    "ACCOUNT_PATH",
+    "ACCOUNT_POLICIES_PATH",
     "BatchRow",
     "MAX_BATCH_ROWS",
     "POLICIES_PATH",
+    "account_key_body",
+    "account_key_path",
     "activation_record",
+    "admin_account_body",
+    "admin_accounts",
     "admin_erase_body",
+    "admin_key_body",
     "apply_policy_fields",
     "attest_receipt",
     "attested_block",
@@ -453,6 +583,7 @@ __all__ = [
     "provider_attest_args",
     "query_params",
     "refuse_origin_hashes",
+    "refuse_unsigned_account_change",
     "reproducibility_block",
     "run_path",
     "with_attested_flag",
