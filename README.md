@@ -1,6 +1,6 @@
 # Verdifax Python SDK
 
-Cryptographic attestation for AI inference. Three lines: send a payload, get a sealed manifest hash, anchored on a public log, you can give to an auditor.
+Cryptographic attestation for AI inference. Register a request key, then send a signed payload, get a sealed manifest hash, anchored on a public log, you can give to an auditor.
 
 ## Install
 
