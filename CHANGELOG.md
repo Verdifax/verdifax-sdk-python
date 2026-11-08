@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.0
+
+The account owner publishes the account's records.
+
+Added, on `VerdifaxClient` and as coroutines on `AsyncVerdifaxClient`:
+
+- `publish_run(run_id)`: `POST /account/runs/{id}/publish` makes a record made by any key of the account public on its random link, the same link a later publish restores. Needs the owner key. The decision is sealed as a run publication (`verdifax.run-publication.v1`) naming the run, its record hash, its job and step and the time, with its place in the account's signal feed, and the feed carries it as a `run.published` event. Idempotent: a record already public is answered as it is, with `publication` `None`. The service's admin key cannot publish another key's record.
+- `unpublish_run(run_id)`: `POST /account/runs/{id}/unpublish` withdraws the record and keeps its link; a `run.unpublished` event.
+- Signal kinds `run.published` and `run.unpublished` in `SIGNAL_KINDS`; `verdifax-verify --signals` reads them since v0.24.0.
+
 ## 1.5.0
 
 The signal feed. The feed lists every control signal Verdifax recorded for the account, in order, each with its sealed entry: a run refused, halted or failed, a policy changed, a sign-off recorded, an approver key registered or revoked, and a key created or revoked. The feed cannot show a signal Verdifax never recorded.

@@ -84,6 +84,7 @@ from ._signoffs import (
     signoff_list,
     signoff_record,
     submit_signoff_path,
+    publication_path,
 )
 from ._signing import (
     ACCOUNT_REQUEST_KEY_PATH,
@@ -767,6 +768,14 @@ class AsyncVerdifaxClient:
         body = signoff_body(prepared, newest, f"GET {newest_path}")
         answer = await self._send_json("POST", submit_path, body)
         return signoff_record(answer, body)
+
+    async def publish_run(self, run_id: int) -> dict[str, Any]:
+        """Make one of the account's records public; see :meth:`verdifax.VerdifaxClient.publish_run`."""
+        return await self._send_json("POST", publication_path(run_id, "publish"))
+
+    async def unpublish_run(self, run_id: int) -> dict[str, Any]:
+        """Withdraw a record from its public link; see :meth:`verdifax.VerdifaxClient.unpublish_run`."""
+        return await self._send_json("POST", publication_path(run_id, "unpublish"))
 
     async def get_signoffs(self, run_id: int, as_owner: bool = False) -> list[dict[str, Any]]:
         """Async version of :meth:`VerdifaxClient.get_signoffs`."""

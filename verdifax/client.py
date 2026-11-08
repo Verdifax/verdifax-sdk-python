@@ -83,6 +83,7 @@ from ._signoffs import (
     signoff_list,
     signoff_record,
     submit_signoff_path,
+    publication_path,
 )
 from ._signing import (
     ACCOUNT_REQUEST_KEY_PATH,
@@ -1272,6 +1273,46 @@ class VerdifaxClient:
         newest = self._get_json(newest_path)
         body = signoff_body(prepared, newest, f"GET {newest_path}")
         return signoff_record(self._send_json("POST", submit_path, body), body)
+
+    def publish_run(self, run_id: int) -> dict[str, Any]:
+        """Make one of the account's records public with ``POST /account/runs/{id}/publish``.
+
+        Needs the account's owner key; the record may have been made by any
+        key of the account. The record is served on a random link, the same
+        link a later publish restores. The decision is sealed as a run
+        publication (``verdifax.run-publication.v1``), anchored on the public
+        log and placed in the account's signal feed as a ``run.published``
+        event. Idempotent: a record already public is answered as it is, with
+        ``publication`` ``None``. The service's admin key cannot publish
+        another key's record.
+
+        Returns:
+            The server's object: ``ok``, ``run_id``, ``public``,
+            ``public_bundle_url`` while public, ``verify_url`` and
+            ``publication``, the sealed record or ``None``. Save
+            ``publication`` as sent; ``verdifax-verify --signals`` reads it
+            since v0.24.0.
+
+        Raises:
+            ValidationError: If ``run_id`` is not a positive integer.
+            APIError: For a non-2xx response, for example 404 for a run of
+                another account.
+            ConnectionError: If the API was unreachable.
+        """
+        return self._send_json("POST", publication_path(run_id, "publish"))
+
+    def unpublish_run(self, run_id: int) -> dict[str, Any]:
+        """Withdraw one of the account's records from its public link with ``POST /account/runs/{id}/unpublish``.
+
+        Both public routes answer 404 for it afterwards; its link is kept,
+        so a later :meth:`publish_run` restores it. Sealed and placed in the
+        feed as a ``run.unpublished`` event. Needs the account's owner key.
+        Idempotent for a run that is not public.
+
+        Returns:
+            The same object as :meth:`publish_run`, with ``public`` false.
+        """
+        return self._send_json("POST", publication_path(run_id, "unpublish"))
 
     def get_signoffs(self, run_id: int, as_owner: bool = False) -> list[dict[str, Any]]:
         """The sign-offs on one run, oldest first, from ``GET /runs/{id}/signoffs``.

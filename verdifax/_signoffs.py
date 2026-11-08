@@ -262,6 +262,14 @@ def run_signoffs_path(run_id: int, as_owner: Any = False) -> str:
     return f"{base}/{run_id}/signoffs"
 
 
+def publication_path(run_id: int, verb: str) -> str:
+    """Validate ``run_id`` and build the owner's publish or unpublish route."""
+    validate_positive_id(run_id, "run_id")
+    if verb not in ("publish", "unpublish"):
+        raise ValidationError("verb must be publish or unpublish")
+    return f"/account/runs/{run_id}/{verb}"
+
+
 def signoff_target(target: Any) -> dict[str, Any]:
     """Check a target and return the block the server reads.
 

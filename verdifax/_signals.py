@@ -55,6 +55,8 @@ SIGNAL_KINDS = (
     "approver.revoked",
     "key.created",
     "key.revoked",
+    "run.published",
+    "run.unpublished",
 )
 SIGNALS_PATH = "/signals"
 ACCOUNT_SIGNALS_PATH = "/account/signals"

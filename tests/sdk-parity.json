@@ -1511,6 +1511,40 @@
       "r": [
         "verdifax_sign_off"
       ]
+    },
+    "POST /account/runs/{id}/publish": {
+      "go": [
+        "PublishRun"
+      ],
+      "node": [
+        "publishRun"
+      ],
+      "python": [
+        "publish_run"
+      ],
+      "python_async": [
+        "publish_run"
+      ],
+      "r": [
+        "verdifax_publish_run"
+      ]
+    },
+    "POST /account/runs/{id}/unpublish": {
+      "go": [
+        "UnpublishRun"
+      ],
+      "node": [
+        "unpublishRun"
+      ],
+      "python": [
+        "unpublish_run"
+      ],
+      "python_async": [
+        "unpublish_run"
+      ],
+      "r": [
+        "verdifax_unpublish_run"
+      ]
     }
   },
   "settings": {
