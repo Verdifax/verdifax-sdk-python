@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 from types import TracebackType
-from typing import Any, Mapping, NoReturn, Optional, Sequence, Type, Union
+from typing import Any, AsyncGenerator, Mapping, NoReturn, Optional, Sequence, Type, Union
 from urllib.parse import quote
 
 import httpx
@@ -53,6 +53,23 @@ from ._requests import (
     run_path,
 )
 from ._retry import AsyncRetryingClient, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY
+from ._signals import (
+    FEED_KEYS_PATH,
+    FOLLOW_WAIT_DEFAULT,
+    WEBHOOKS_PATH,
+    SignalsRequest,
+    deliveries_request,
+    failure_receipt_path,
+    feed_key_body,
+    feed_key_path,
+    follow_async,
+    follow_request,
+    signal_page,
+    signals_path,
+    signals_request,
+    webhook_body,
+    webhook_path,
+)
 from ._signoffs import (
     APPROVERS_PATH,
     SIGNOFF_HISTORY_PATH,
@@ -764,6 +781,81 @@ class AsyncVerdifaxClient:
         """Async version of :meth:`VerdifaxClient.get_signoff_history`."""
         body = parse_response(await self._get(SIGNOFF_HISTORY_PATH))
         return signoff_list(body, "sign-off history")
+
+    # ── signal feed ────────────────────────────────────────────────────────
+    async def _read_signals(self, request: SignalsRequest) -> dict[str, Any]:
+        try:
+            response = await self._http.get(
+                request.path, params=request.params, timeout=request.timeout
+            )
+        except httpx.HTTPError as exc:
+            raise wrap_transport_error(exc) from exc
+        return signal_page(parse_response(response), f"GET {request.path}")
+
+    async def get_signals(
+        self,
+        after: int = 0,
+        limit: Optional[int] = None,
+        wait: int = 0,
+        as_owner: bool = False,
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.get_signals`.
+
+        The HTTP timeout of this call is at least ``wait`` plus 30 seconds.
+        """
+        request = signals_request(after, limit, wait, as_owner, self.timeout)
+        return await self._read_signals(request)
+
+    def follow_signals(
+        self, after: int = 0, wait: int = FOLLOW_WAIT_DEFAULT, as_owner: bool = False
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Async version of :meth:`VerdifaxClient.follow_signals`: an async generator.
+
+        Use it with ``async for``. The arguments are checked when this is
+        called, before anything is sent. An error carries ``last_sequence``,
+        the last sequence read.
+        """
+        follow_request(after, wait, as_owner)
+
+        async def read_page(place: int) -> dict[str, Any]:
+            request = signals_request(place, None, wait, as_owner, self.timeout)
+            return await self._read_signals(request)
+
+        return follow_async(read_page, after, wait, f"GET {signals_path(as_owner)}")
+
+    async def create_feed_key(self, name: str, expires_at: Optional[str] = None) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.create_feed_key`.
+
+        A feed key reads the account's feed and nothing else.
+        """
+        return await self._send_json("POST", FEED_KEYS_PATH, feed_key_body(name, expires_at))
+
+    async def revoke_feed_key(self, id: int) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.revoke_feed_key`."""
+        return await self._send_json("DELETE", feed_key_path(id))
+
+    async def create_webhook(
+        self, url: str, types: Optional[Sequence[str]] = None
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.create_webhook`."""
+        return await self._send_json("POST", WEBHOOKS_PATH, webhook_body(url, types))
+
+    async def list_webhooks(self) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.list_webhooks`."""
+        return await self._get_json(WEBHOOKS_PATH)
+
+    async def delete_webhook(self, id: int) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.delete_webhook`."""
+        return await self._send_json("DELETE", webhook_path(id))
+
+    async def list_webhook_deliveries(self, id: int, limit: Optional[int] = None) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.list_webhook_deliveries`."""
+        path, params = deliveries_request(id, limit)
+        return await self._get_json(path, params or None)
+
+    async def get_failure_receipt(self, run_id: int) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.get_failure_receipt`."""
+        return await self._get_json(failure_receipt_path(run_id))
 
     async def admin_create_account(
         self, name: str, tier: Optional[str] = None, expires_at: Optional[str] = None

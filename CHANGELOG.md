@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.0
+
+The signal feed. The feed lists every control signal Verdifax recorded for the account, in order, each with its sealed entry: a run refused, halted or failed, a policy changed, a sign-off recorded, an approver key registered or revoked, and a key created or revoked. The feed cannot show a signal Verdifax never recorded.
+
+Added, on `VerdifaxClient` and as coroutines on `AsyncVerdifaxClient`:
+
+- `get_signals(after=0, limit=None, wait=0, as_owner=False)`: one page of the feed from `GET /signals` for a feed key, or `GET /account/signals` for the owner key with `as_owner=True`. `after` is the last sequence read, `limit` is 1 to 500 and `wait` is 0 to 25 seconds; anything else raises `ValidationError` before sending. The HTTP timeout of this call is at least `wait` plus 30 seconds, whatever the client's own timeout.
+- `follow_signals(after=0, wait=25, as_owner=False)`: follows the feed page after page from `next_after`, so it never skips or repeats an event, and waits on the server when there is nothing new. It is a generator on `VerdifaxClient` and an async generator on `AsyncVerdifaxClient`. A failed page is retried with the client's normal retry policy, and an error it raises carries `last_sequence`, the last sequence read, so the caller can go on from the same place.
+- `create_feed_key(name, expires_at=None)` and `revoke_feed_key(id)`: `POST /account/feed-keys` and `DELETE /account/feed-keys/{id}`, for the owner key. Feed keys read the feed and nothing else.
+- `create_webhook(url, types=None)`, `list_webhooks()`, `delete_webhook(id)` and `list_webhook_deliveries(id, limit=None)`: the account's webhooks and their delivery logs, for the owner key. The url must start `https://` and each type must be one of the nine signal kinds, at most once; with no types a webhook takes every kind. The server checks the address too. A webhook delivery is a copy of one event: the pull feed and the public log are the record.
+- `get_failure_receipt(run_id)`: `GET /runs/{id}/failure-receipt`, the sealed failure receipt of a run that failed with a server error.
+- `verify_webhook(headers, body, secret, tolerance_seconds=300, now=None)`, which checks a webhook delivery under the Standard Webhooks scheme and returns its CloudEvent, and `signal_event_hash(kind, entry_hash, account, sequence, previous_signal_hash)`, which recomputes an event's hash. Neither makes a request. `verify_webhook` compares signatures in constant time, refuses a timestamp more than the tolerance from now in either direction, and raises `WebhookVerificationError` naming the check that failed. It never logs the secret.
+- `SIGNAL_KINDS`, the nine signal kinds, and `WebhookVerificationError`.
+
+Save a page of the feed with `json.dump`; `verdifax-verify --signals` checks a saved feed.
+
 ## 1.4.0
 
 Customer sign-off on results. An approver signs a decision, approve or reject, on one exact result with an approver key the account's owner registered, and Verdifax logs it on the public log.

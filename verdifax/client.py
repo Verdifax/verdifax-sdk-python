@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 from types import TracebackType
-from typing import Any, Mapping, NoReturn, Optional, Sequence, Type, Union
+from typing import Any, Generator, Mapping, NoReturn, Optional, Sequence, Type, Union
 from urllib.parse import quote
 
 import httpx
@@ -52,6 +52,23 @@ from ._requests import (
     run_path,
 )
 from ._retry import DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY, RetryingClient
+from ._signals import (
+    FEED_KEYS_PATH,
+    FOLLOW_WAIT_DEFAULT,
+    WEBHOOKS_PATH,
+    SignalsRequest,
+    deliveries_request,
+    failure_receipt_path,
+    feed_key_body,
+    feed_key_path,
+    follow,
+    follow_request,
+    signal_page,
+    signals_path,
+    signals_request,
+    webhook_body,
+    webhook_path,
+)
 from ._signoffs import (
     APPROVERS_PATH,
     SIGNOFF_HISTORY_PATH,
@@ -1300,6 +1317,192 @@ class VerdifaxClient:
         """
         body = parse_response(self._get(SIGNOFF_HISTORY_PATH))
         return signoff_list(body, "sign-off history")
+
+    # ── signal feed ────────────────────────────────────────────────────────
+    # The feed lists every control signal Verdifax recorded for the account,
+    # in order, each with its sealed entry. It cannot show a signal Verdifax
+    # never recorded. A feed key reads GET /signals and nothing else; the
+    # owner key reads the same feed with as_owner=True. A webhook delivery is
+    # a copy: the pull feed and the public log are the record. The checks and
+    # the paging live in verdifax/_signals.py.
+    def _read_signals(self, request: SignalsRequest) -> dict[str, Any]:
+        try:
+            response = self._http.get(request.path, params=request.params, timeout=request.timeout)
+        except httpx.HTTPError as exc:
+            raise wrap_transport_error(exc) from exc
+        return signal_page(parse_response(response), f"GET {request.path}")
+
+    def get_signals(
+        self,
+        after: int = 0,
+        limit: Optional[int] = None,
+        wait: int = 0,
+        as_owner: bool = False,
+    ) -> dict[str, Any]:
+        """Read one page of the account's feed from ``GET /signals``.
+
+        A feed key reads ``GET /signals``. With ``as_owner=True`` the owner
+        key reads the same feed from ``GET /account/signals``. Events come
+        oldest first, each a CloudEvent whose ``data`` carries ``kind``,
+        ``sequence``, ``previous_signal_hash``, ``event_hash`` and the sealed
+        ``entry``. When there is no event after ``after`` the server holds
+        the request open up to ``wait`` seconds for the next. The HTTP
+        timeout of this call is at least ``wait`` plus 30 seconds, whatever
+        the client's own.
+
+        Args:
+            after: The last sequence read; 0 reads from the start.
+            limit: At most this many events, 1 to 500. The server's default
+                is 100.
+            wait: Seconds to wait for an event, 0 to 25.
+            as_owner: Use the owner key's route.
+
+        Returns:
+            The page: ``events``, ``next_after`` (pass it as ``after`` next)
+            and ``newest``, the account's newest sequence.
+
+        Raises:
+            ValidationError: For a bad ``after``, ``limit``, ``wait`` or
+                ``as_owner``, before anything is sent.
+            VerdifaxError: If the answer is not a feed page.
+            APIError: For a non-2xx response, for example 429 for a key
+                that already holds two waits open.
+            ConnectionError: If the API was unreachable.
+        """
+        return self._read_signals(signals_request(after, limit, wait, as_owner, self.timeout))
+
+    def follow_signals(
+        self, after: int = 0, wait: int = FOLLOW_WAIT_DEFAULT, as_owner: bool = False
+    ) -> Generator[dict[str, Any], None, None]:
+        """Follow the account's feed from ``after``, yielding each event in order.
+
+        Reads page after page with :meth:`get_signals`, going on from each
+        page's ``next_after``, so no event is skipped or repeated, and waits
+        up to ``wait`` seconds on the server when there is nothing new. A
+        failed read is retried with the client's normal retry policy. Stop by
+        leaving the loop. The arguments are checked when this is called,
+        before anything is sent.
+
+        Raises:
+            ValidationError: For a bad ``after``, ``wait`` or ``as_owner``.
+            VerdifaxError: Any error a read raises, or a page that would
+                skip or repeat an event, with ``last_sequence`` set to the
+                last sequence read: pass it as ``after`` to go on.
+        """
+        follow_request(after, wait, as_owner)
+
+        def read_page(place: int) -> dict[str, Any]:
+            return self._read_signals(signals_request(place, None, wait, as_owner, self.timeout))
+
+        return follow(read_page, after, wait, f"GET {signals_path(as_owner)}")
+
+    def create_feed_key(self, name: str, expires_at: Optional[str] = None) -> dict[str, Any]:
+        """Create a feed key in the account with ``POST /account/feed-keys``.
+
+        Needs the account's owner key. A feed key reads the account's feed
+        with :meth:`get_signals` and :meth:`follow_signals`, and nothing else.
+
+        Args:
+            name: The key's name. At most 200 bytes.
+            expires_at: Optional cutoff, RFC 3339.
+
+        Returns:
+            The key with ``secret``, which is shown this once, ``id``,
+            ``name``, ``hint``, ``tier`` and ``account_id``.
+
+        Raises:
+            ValidationError: If ``name`` is empty, or ``expires_at`` is not a
+                ``str``, before anything is sent.
+        """
+        return self._send_json("POST", FEED_KEYS_PATH, feed_key_body(name, expires_at))
+
+    def revoke_feed_key(self, id: int) -> dict[str, Any]:
+        """Revoke a feed key with ``DELETE /account/feed-keys/{id}``.
+
+        Needs the account's owner key.
+
+        Raises:
+            ValidationError: If ``id`` is not a positive integer.
+            APIError: For a non-2xx response, for example 404 if ``id`` is not
+                a feed key of the account.
+        """
+        return self._send_json("DELETE", feed_key_path(id))
+
+    def create_webhook(self, url: str, types: Optional[Sequence[str]] = None) -> dict[str, Any]:
+        """Subscribe a webhook with ``POST /account/webhooks``.
+
+        Needs the account's owner key. Each event of the named kinds is sent
+        to ``url``, signed under the Standard Webhooks scheme; check each
+        delivery with :func:`verdifax.verify_webhook`. A delivery is a copy:
+        the pull feed and the public log are the record.
+
+        Args:
+            url: An ``https://`` address. The server checks it too.
+            types: Signal kinds, each at most once. ``None`` or an empty list
+                takes every kind.
+
+        Returns:
+            The subscription with ``secret`` (``whsec_`` and base64), which is
+            shown this once, ``id``, ``url``, ``types``, ``created_at`` and
+            ``hint``.
+
+        Raises:
+            ValidationError: If ``url`` does not start ``https://`` or
+                ``types`` is not a list of distinct signal kinds, before
+                anything is sent.
+            APIError: For a non-2xx response: 400 for an address or type the
+                server refuses, 409 when the account holds ten already, 503
+                when the deployment has no KMS key.
+        """
+        return self._send_json("POST", WEBHOOKS_PATH, webhook_body(url, types))
+
+    def list_webhooks(self) -> dict[str, Any]:
+        """The account's webhooks, without their secrets, from ``GET /account/webhooks``."""
+        return self._get_json(WEBHOOKS_PATH)
+
+    def delete_webhook(self, id: int) -> dict[str, Any]:
+        """Delete a webhook with ``DELETE /account/webhooks/{id}``.
+
+        Raises:
+            ValidationError: If ``id`` is not a positive integer.
+        """
+        return self._send_json("DELETE", webhook_path(id))
+
+    def list_webhook_deliveries(self, id: int, limit: Optional[int] = None) -> dict[str, Any]:
+        """A webhook's delivery log from ``GET /account/webhooks/{id}/deliveries``.
+
+        Args:
+            id: The webhook's id.
+            limit: At most this many deliveries, 1 to 500. The server's
+                default is 50.
+
+        Returns:
+            The server's object: ``ok``, ``webhook_id`` and ``deliveries``,
+            each with ``sequence``, ``status``, ``attempts``,
+            ``last_status_code``, ``last_error`` and ``created_at``.
+
+        Raises:
+            ValidationError: If ``id`` is not a positive integer or ``limit``
+                is not 1 to 500, before anything is sent.
+        """
+        path, params = deliveries_request(id, limit)
+        return self._get_json(path, params or None)
+
+    def get_failure_receipt(self, run_id: int) -> dict[str, Any]:
+        """The sealed failure receipt of a run that failed with a server error.
+
+        Calls ``GET /runs/{run_id}/failure-receipt`` with a member key.
+
+        Returns:
+            The receipt document: ``ok``, ``run_id``, ``failure_receipt`` and,
+            when present, ``receipt_anchor`` and ``receipt_context``.
+
+        Raises:
+            ValidationError: If ``run_id`` is not a positive integer.
+            APIError: For a non-2xx response, for example 404 for a failed run
+                from before failure receipts.
+        """
+        return self._get_json(failure_receipt_path(run_id))
 
     def admin_create_account(
         self, name: str, tier: Optional[str] = None, expires_at: Optional[str] = None

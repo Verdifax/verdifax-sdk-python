@@ -182,6 +182,12 @@
       "python": "section0.dse_dispatch_hash",
       "r": "verdifax_dse_dispatch_hash"
     },
+    "follow_signals": {
+      "go": "FollowSignals",
+      "node": "followSignals",
+      "python": "follow_signals",
+      "r": "verdifax_follow_signals"
+    },
     "format_provider_payload": {
       "go": "FormatProviderPayload",
       "node": "formatProviderPayload",
@@ -254,6 +260,12 @@
       "python": "sign_request",
       "r": "verdifax_sign_request"
     },
+    "signal_event_hash": {
+      "go": "SignalEventHash",
+      "node": "signalEventHash",
+      "python": "signal_event_hash",
+      "r": "verdifax_signal_event_hash"
+    },
     "signoff_preimage": {
       "go": "SignOffPreimage",
       "node": "signOffPreimage",
@@ -271,12 +283,19 @@
       "node": "validateRouteId",
       "python": "validate_route_id",
       "r": "verdifax_validate_route_id"
+    },
+    "verify_webhook": {
+      "go": "VerifyWebhook",
+      "node": "verifyWebhook",
+      "python": "verify_webhook",
+      "r": "verdifax_verify_webhook"
     }
   },
   "notes": {
     "go_provider_govern": "Go passes the option verdifax.WithGovern(); Node passes govern: true; Python govern=True; R govern = TRUE.",
     "python_async": "Every python method above also exists on AsyncVerdifaxClient as a coroutine.",
-    "account_routes": "Methods that serve both a member route and an /account route take an option to use the owner key's route: Go AsOwner, Node asOwner, Python as_owner, R as_owner."
+    "account_routes": "Methods that serve both a member route and an /account route take an option to use the owner key's route: Go AsOwner, Node asOwner, Python as_owner, R as_owner.",
+    "signal_feed": "GET /signals takes a feed key; GET /account/signals is the same method with the owner option. The feed is read with after (the last sequence read), limit (1 to 500) and wait (0 to 25 seconds); the HTTP timeout exceeds the wait. follow_signals reads page after page from a place, waiting between, until the caller stops it. verify_webhook checks a delivery under the Standard Webhooks scheme: whsec_ secret, webhook-id, webhook-timestamp within a tolerance (default 300 seconds), and any v1 signature in webhook-signature, compared in constant time; it returns the CloudEvent."
   },
   "options": {
     "provider_govern": {
@@ -312,6 +331,23 @@
         "verdifax_revoke_approver"
       ]
     },
+    "DELETE /account/feed-keys/{id}": {
+      "go": [
+        "RevokeFeedKey"
+      ],
+      "node": [
+        "revokeFeedKey"
+      ],
+      "python": [
+        "revoke_feed_key"
+      ],
+      "python_async": [
+        "revoke_feed_key"
+      ],
+      "r": [
+        "verdifax_revoke_feed_key"
+      ]
+    },
     "DELETE /account/keys/{id}": {
       "go": [
         "RevokeAccountKey"
@@ -344,6 +380,23 @@
       ],
       "r": [
         "verdifax_clear_account_request_key"
+      ]
+    },
+    "DELETE /account/webhooks/{id}": {
+      "go": [
+        "DeleteWebhook"
+      ],
+      "node": [
+        "deleteWebhook"
+      ],
+      "python": [
+        "delete_webhook"
+      ],
+      "python_async": [
+        "delete_webhook"
+      ],
+      "r": [
+        "verdifax_delete_webhook"
       ]
     },
     "DELETE /keys/request-key": {
@@ -521,6 +574,23 @@
         "verdifax_get_signoffs"
       ]
     },
+    "GET /account/signals": {
+      "go": [
+        "GetSignals"
+      ],
+      "node": [
+        "getSignals"
+      ],
+      "python": [
+        "get_signals"
+      ],
+      "python_async": [
+        "get_signals"
+      ],
+      "r": [
+        "verdifax_get_signals"
+      ]
+    },
     "GET /account/signoffs/history": {
       "go": [
         "GetSignOffHistory"
@@ -553,6 +623,40 @@
       ],
       "r": [
         "verdifax_get_newest_signoff"
+      ]
+    },
+    "GET /account/webhooks": {
+      "go": [
+        "ListWebhooks"
+      ],
+      "node": [
+        "listWebhooks"
+      ],
+      "python": [
+        "list_webhooks"
+      ],
+      "python_async": [
+        "list_webhooks"
+      ],
+      "r": [
+        "verdifax_list_webhooks"
+      ]
+    },
+    "GET /account/webhooks/{id}/deliveries": {
+      "go": [
+        "ListWebhookDeliveries"
+      ],
+      "node": [
+        "listWebhookDeliveries"
+      ],
+      "python": [
+        "list_webhook_deliveries"
+      ],
+      "python_async": [
+        "list_webhook_deliveries"
+      ],
+      "r": [
+        "verdifax_list_webhook_deliveries"
       ]
     },
     "GET /attestations": {
@@ -917,6 +1021,23 @@
         "verdifax_get_deny_receipt"
       ]
     },
+    "GET /runs/{id}/failure-receipt": {
+      "go": [
+        "GetFailureReceipt"
+      ],
+      "node": [
+        "getFailureReceipt"
+      ],
+      "python": [
+        "get_failure_receipt"
+      ],
+      "python_async": [
+        "get_failure_receipt"
+      ],
+      "r": [
+        "verdifax_get_failure_receipt"
+      ]
+    },
     "GET /runs/{id}/macc-halt-receipt": {
       "go": [
         "GetMACCHaltReceipt"
@@ -1002,6 +1123,23 @@
         "verdifax_verify_run"
       ]
     },
+    "GET /signals": {
+      "go": [
+        "GetSignals"
+      ],
+      "node": [
+        "getSignals"
+      ],
+      "python": [
+        "get_signals"
+      ],
+      "python_async": [
+        "get_signals"
+      ],
+      "r": [
+        "verdifax_get_signals"
+      ]
+    },
     "GET /signoffs/newest": {
       "go": [
         "GetNewestSignOff"
@@ -1068,6 +1206,23 @@
       ],
       "r": [
         "verdifax_register_approver"
+      ]
+    },
+    "POST /account/feed-keys": {
+      "go": [
+        "CreateFeedKey"
+      ],
+      "node": [
+        "createFeedKey"
+      ],
+      "python": [
+        "create_feed_key"
+      ],
+      "python_async": [
+        "create_feed_key"
+      ],
+      "r": [
+        "verdifax_create_feed_key"
       ]
     },
     "POST /account/keys": {
@@ -1170,6 +1325,23 @@
       ],
       "r": [
         "verdifax_sign_off"
+      ]
+    },
+    "POST /account/webhooks": {
+      "go": [
+        "CreateWebhook"
+      ],
+      "node": [
+        "createWebhook"
+      ],
+      "python": [
+        "create_webhook"
+      ],
+      "python_async": [
+        "create_webhook"
+      ],
+      "r": [
+        "verdifax_create_webhook"
       ]
     },
     "POST /dcae/verify": {

@@ -31,6 +31,7 @@ from typing import (
 
 from ._requests import MAX_BATCH_ROWS, format_provider_payload
 from ._retry import DEFAULT_MAX_RETRIES
+from ._signals import SIGNAL_KINDS, signal_event_hash, verify_webhook
 from ._signoffs import approver_key_proof, signoff_preimage
 from ._signing import (
     RequestKeyPair,
@@ -61,6 +62,7 @@ from .exceptions import (
     UnsupportedOperationError,
     ValidationError,
     VerdifaxError,
+    WebhookVerificationError,
 )
 from .helpers import attest_claude_response, attest_openai_response
 from .jobs import AsyncJob, Job
@@ -253,6 +255,7 @@ __all__ = [
     "RunSummary",
     "RunsExport",
     "RunsExportCSV",
+    "SIGNAL_KINDS",
     "STAGE_NAMES",
     "SignOffTarget",
     "StageError",
@@ -262,6 +265,7 @@ __all__ = [
     "VerdifaxClient",
     "VerdifaxError",
     "VerifyResponse",
+    "WebhookVerificationError",
     "__version__",
     "approver_key_proof",
     "attest",
@@ -280,9 +284,11 @@ __all__ = [
     "section0",
     "sign_request",
     "sign_request_v2",
+    "signal_event_hash",
     "signoff_preimage",
     "validate_hex64",
     "validate_route_id",
     "verify",
     "verify_run",
+    "verify_webhook",
 ]

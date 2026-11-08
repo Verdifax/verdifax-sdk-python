@@ -12,7 +12,15 @@ from typing import Any, Optional
 
 
 class VerdifaxError(Exception):
-    """Base class for every exception raised by the Verdifax SDK."""
+    """Base class for every exception raised by the Verdifax SDK.
+
+    Attributes:
+        last_sequence: Set on an error ``follow_signals`` raises: the last
+            sequence of the feed it read. Pass it as ``after`` to go on from
+            the same place. ``None`` on every other error.
+    """
+
+    last_sequence: Optional[int] = None
 
 
 class ValidationError(VerdifaxError):
@@ -72,6 +80,19 @@ class APIError(VerdifaxError):
         return f"APIError(status_code={self.status_code!r}, message={self.message!r})"
 
 
+class WebhookVerificationError(VerdifaxError):
+    """Raised when a webhook delivery fails a check, so it must not be trusted.
+
+    Attributes:
+        check: Which check failed: ``secret``, ``webhook-id``,
+            ``webhook-timestamp``, ``webhook-signature`` or ``body``.
+    """
+
+    def __init__(self, check: str, message: str) -> None:
+        super().__init__(f"{check}: {message}")
+        self.check = check
+
+
 class StageError(APIError):
     """Raised when a specific pipeline stage rejects a run.
 
@@ -102,4 +123,5 @@ __all__ = [
     "UnsupportedOperationError",
     "ValidationError",
     "VerdifaxError",
+    "WebhookVerificationError",
 ]

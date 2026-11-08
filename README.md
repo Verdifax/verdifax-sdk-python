@@ -149,6 +149,15 @@ asyncio.run(main())
 | `get_signoffs(run_id, as_owner=False)` | `GET /runs/{run_id}/signoffs`; with `as_owner=True`, `GET /account/runs/{run_id}/signoffs` | required, or owner key |
 | `get_newest_signoff(as_owner=False)` | `GET /signoffs/newest`; with `as_owner=True`, `GET /account/signoffs/newest` | required, or owner key |
 | `get_signoff_history()` | `GET /account/signoffs/history` | owner key |
+| `get_signals(after=0, limit=None, wait=0, as_owner=False)` | `GET /signals`; with `as_owner=True`, `GET /account/signals` | feed key, or owner key |
+| `follow_signals(after=0, wait=25, as_owner=False)` | `GET /signals`, page after page; with `as_owner=True`, `GET /account/signals` | feed key, or owner key |
+| `create_feed_key(name, expires_at=None)` | `POST /account/feed-keys` | owner key |
+| `revoke_feed_key(id)` | `DELETE /account/feed-keys/{id}` | owner key |
+| `create_webhook(url, types=None)` | `POST /account/webhooks` | owner key |
+| `list_webhooks()` | `GET /account/webhooks` | owner key |
+| `delete_webhook(id)` | `DELETE /account/webhooks/{id}` | owner key |
+| `list_webhook_deliveries(id, limit=None)` | `GET /account/webhooks/{id}/deliveries` | owner key |
+| `get_failure_receipt(run_id)` | `GET /runs/{run_id}/failure-receipt` | required |
 | `admin_create_account(name, tier=None, expires_at=None)` | `POST /admin/accounts` | admin |
 | `admin_list_accounts()` | `GET /admin/accounts` | admin |
 | `admin_create_key(name, account_id=None)` | `POST /admin/keys` | admin |
@@ -157,7 +166,7 @@ asyncio.run(main())
 | `admin_clear_request_key(key_id)` | `DELETE /admin/keys/{id}/request-key` | admin |
 | `admin_erase(...)` | `POST /admin/erase` | admin |
 
-These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `policy_activation_preimage`, `policy_activation_approval`, `signoff_preimage`, `approver_key_proof`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
+These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `policy_activation_preimage`, `policy_activation_approval`, `signoff_preimage`, `approver_key_proof`, `signal_event_hash`, `verify_webhook`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
 
 `get_run_artifacts`, `get_public_bundle` and `get_public_bundle_by_token` return the exact JSON text the server sent, so you can save it and check it with `verdifax-verify`.
 
@@ -489,6 +498,56 @@ A sign-off shows that the holder of a registered approver key signed that decisi
 `get_signoffs(run_id)` returns a run's sign-offs, oldest first, in the form `verdifax-verify --signoff FILE` reads; the latest is the decision in force. `get_signoff_history()` returns the account's whole chain for the owner key, in the form `verdifax-verify --signoff-history FILE` reads, and the owner's `export_account_runs` carries the same chain as `signoffs`. `verdifax-verify` reads sign-offs since v0.22.0.
 
 `verdifax.signoff_preimage(chain_id, previous_signoff_hash, target, decision, note_hash, signed_at, nonce)` returns the bytes an approver key signs, and `verdifax.approver_key_proof(private_key)` returns the public key and proof to register. Neither makes a request.
+
+## Signal feed
+
+The feed lists every control signal Verdifax recorded for the account, in order: a run refused, halted or failed, a policy changed, a sign-off recorded, an approver key registered or revoked, and a key created or revoked. Each event is a CloudEvent whose `data` carries its `kind`, its `sequence` in the account's feed, the `previous_signal_hash`, its own `event_hash` and the sealed `entry` it names. The feed cannot show a signal Verdifax never recorded.
+
+The owner key creates a feed key with `create_feed_key(name, expires_at=None)` and revokes it with `revoke_feed_key(id)`. A feed key reads the feed and nothing else. It reads `GET /signals`, and the owner key reads the same feed with `as_owner=True`.
+
+```python
+from verdifax import VerdifaxClient
+
+owner = VerdifaxClient(api_key=owner_secret)
+feed_key = owner.create_feed_key("siem")  # its secret is shown this once
+
+client = VerdifaxClient(api_key=feed_key["secret"])
+last_sequence_read = 0  # or the place saved last time
+for event in client.follow_signals(after=last_sequence_read):
+    data = event["data"]
+    handle(data["kind"], data["entry"])
+    last_sequence_read = data["sequence"]  # keep it, to go on from here next time
+```
+
+`get_signals(after=0, limit=None, wait=0, as_owner=False)` reads one page: `events`, `next_after` and `newest`. `after` is the last sequence read, `limit` is 1 to 500 (the server's default is 100) and `wait` is 0 to 25 seconds, the time the server holds the request open when there is nothing after `after`. Anything else raises `ValidationError` before anything is sent. The HTTP timeout of a feed read is at least `wait` plus 30 seconds, whatever the client's own timeout.
+
+`follow_signals(after=0, wait=25, as_owner=False)` reads page after page, going on from each page's `next_after`, so it never skips or repeats an event; a page that would skip or repeat one raises `VerdifaxError`. It is a generator, and an async generator on `AsyncVerdifaxClient` (use `async for`); stop by leaving the loop. A failed page is retried with the client's normal retry policy, and the error it then raises carries `last_sequence`, the last sequence read, to pass as `after` to go on. With `wait=0` it pauses one second after an empty page.
+
+Save a page with `json.dump(client.get_signals(), file)`. `verdifax-verify --signals` checks a saved feed. `verdifax.signal_event_hash(kind, entry_hash, account, sequence, previous_signal_hash)` recomputes an event's hash, the hex SHA-256 of `verdifax.signal.v1` and those values joined by zero bytes, and makes no request.
+
+### Webhooks
+
+The owner key subscribes a webhook with `create_webhook(url, types=None)`. The url must start `https://`, and `types` lists signal kinds from `verdifax.SIGNAL_KINDS`, each at most once; with no types the webhook takes every kind. The server checks the address too, and answers 409 when the account holds ten webhooks already. The answer carries the webhook's `secret`, shown this once. `list_webhooks()`, `delete_webhook(id)` and `list_webhook_deliveries(id, limit=None)` manage the subscriptions and show each delivery's attempts.
+
+A delivery is a copy: the pull feed and the public log are the record. Check every delivery before acting on it:
+
+```python
+import verdifax
+
+def receive(headers, raw_body):
+    try:
+        event = verdifax.verify_webhook(headers, raw_body, webhook_secret)
+    except verdifax.WebhookVerificationError as failed:
+        return 400  # failed.check names the check that failed
+    handle(event["data"]["kind"], event["data"]["entry"])
+    return 204
+```
+
+`verdifax.verify_webhook(headers, body, secret, tolerance_seconds=300, now=None)` follows the Standard Webhooks scheme. The secret is `whsec_` and base64. The signed content is `webhook-id`, a dot, `webhook-timestamp`, a dot and the raw body bytes, and `webhook-signature` lists `v1,<base64>` entries, any one of which may match; each is compared in constant time. A timestamp more than `tolerance_seconds` from now, in either direction, is refused. Header names are read in any case. Pass the body exactly as received, bytes or text, before any JSON parsing. It returns the CloudEvent, or raises `WebhookVerificationError` naming the check that failed. It makes no request and never logs the secret.
+
+### Failure receipts
+
+`get_failure_receipt(run_id)` returns the sealed failure receipt of a run that failed with a server error, as `failure_receipt`, with its `receipt_anchor` when it has one. A failed run from before failure receipts answers 404.
 
 ## Optional execute fields
 
