@@ -614,6 +614,16 @@ def test_get_signoffs_reads_a_members_run():
     assert (seen[0].method, seen[0].url.path) == ("GET", "/runs/42/signoffs")
 
 
+def test_get_signoffs_keeps_every_field_the_server_sealed():
+    sealed = {
+        **RECORD,
+        "signal": {"signal_account": "account-7", "signal_sequence": 5, "signal_previous_hash": "0" * 64},
+        "a_later_field": {"n": 12345678901234567890},
+    }
+    result = sync_client(responder([], body=[sealed])).get_signoffs(42)
+    assert json.dumps(result) == json.dumps([sealed])
+
+
 def test_get_signoffs_as_owner_reads_any_run_of_the_account():
     seen: list[httpx.Request] = []
     sync_client(responder(seen, body=[])).get_signoffs(42, as_owner=True)
