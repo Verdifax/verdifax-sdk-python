@@ -18,7 +18,11 @@ PUBLICATION = {
     "job_id": "loan-1",
     "step_id": "verdict",
     "changed_at": "2026-11-08T20:00:00Z",
-    "signal": {"signal_account": "account-7", "signal_sequence": 9, "signal_previous_hash": "b" * 64},
+    "signal": {
+        "signal_account": "account-7",
+        "signal_sequence": 9,
+        "signal_previous_hash": "b" * 64,
+    },
     "publication_hash": "c" * 64,
     "later_field": 12345678901234567890,
 }

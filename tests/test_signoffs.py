@@ -617,7 +617,11 @@ def test_get_signoffs_reads_a_members_run():
 def test_get_signoffs_keeps_every_field_the_server_sealed():
     sealed = {
         **RECORD,
-        "signal": {"signal_account": "account-7", "signal_sequence": 5, "signal_previous_hash": "0" * 64},
+        "signal": {
+            "signal_account": "account-7",
+            "signal_sequence": 5,
+            "signal_previous_hash": "0" * 64,
+        },
         "a_later_field": {"n": 12345678901234567890},
     }
     result = sync_client(responder([], body=[sealed])).get_signoffs(42)

@@ -1120,13 +1120,15 @@ def test_the_readme_states_the_signal_feed_facts():
         assert f"`verdifax.{name}(" in section, name
 
 
-def test_the_changelog_opens_with_1_6_0_and_1_5_0_follows():
+def test_the_changelog_opens_with_1_6_1_and_1_6_0_follows():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     newest = changelog.split("\n## ", 2)[1]
-    assert newest.startswith("1.6.0\n")
-    for phrase in ("publish_run", "unpublish_run", "run.published", "run.unpublished", "v0.24.0"):
-        assert phrase in newest, phrase
+    assert newest.startswith("1.6.1\n")
     entry = changelog.split("\n## ", 3)[2]
+    assert entry.startswith("1.6.0\n")
+    for phrase in ("publish_run", "unpublish_run", "run.published", "run.unpublished", "v0.24.0"):
+        assert phrase in entry, phrase
+    entry = changelog.split("\n## ", 4)[3]
     assert entry.startswith("1.5.0\n")
     for phrase in (
         "feed keys",

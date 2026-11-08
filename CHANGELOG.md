@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.1
+
+The same code as 1.6.0, which was tagged but never published: its release job stopped at the formatting check on two test files. This release formats them and publishes.
+
 ## 1.6.0
 
 The account owner publishes the account's records.
