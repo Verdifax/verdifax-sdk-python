@@ -1289,9 +1289,11 @@ class VerdifaxClient:
         Needs the account's owner key; the record may have been made by any
         key of the account. The record is served on a random link, the same
         link a later publish restores. The decision is sealed as a run
-        publication (``verdifax.run-publication.v1``), anchored on the public
-        log and placed in the account's signal feed as a ``run.published``
-        event. Idempotent: a record already public is answered as it is, with
+        publication (``verdifax.run-publication.v2``, with ``decided_by``
+        ``owner``, or ``verdifax_admin`` when a Verdifax admin key withdrew the
+        record; a v1 publication carries none and was the owner's), anchored
+        on the public log and placed in the account's signal feed as a
+        ``run.published`` event. Idempotent: a record already public is answered as it is, with
         ``publication`` ``None``. The service's admin key cannot publish
         another key's record.
 

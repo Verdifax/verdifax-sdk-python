@@ -11,8 +11,9 @@ from tests.test_parity import responder, sync_client
 from verdifax import SIGNAL_KINDS, ValidationError, VerdifaxClient
 
 PUBLICATION = {
-    "format": "verdifax.run-publication.v1",
+    "format": "verdifax.run-publication.v2",
     "action": "run.published",
+    "decided_by": "owner",
     "run_id": 41,
     "record_hash": "a" * 64,
     "job_id": "loan-1",
@@ -47,6 +48,7 @@ def test_publish_and_unpublish_post_to_the_owner_routes_and_return_the_answer_as
     ]
     assert seen[0].content == b""
     assert client.publish_run(41)["publication"]["later_field"] == 12345678901234567890
+    assert client.publish_run(41)["publication"]["decided_by"] == "owner"
 
 
 def test_publish_refuses_a_bad_id_before_sending():

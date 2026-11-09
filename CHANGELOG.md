@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.0
+
+A publication says who decided.
+
+- A run publication is now `verdifax.run-publication.v2` and seals who decided: `owner`, the account's owner key, or `verdifax_admin`, a Verdifax admin key, which can withdraw any public record and publish only records it made itself. Every change to a record's public state, Verdifax's included, is now sealed in the feed of the record's account. The publication dict carries it as `decided_by`. Publications sealed before v2 are v1, carry no `decided_by`, and were the owner's. `verdifax-verify --signals` reads v2 since v0.26.0.
+
 ## 1.7.0
 
 A published stopped run is served as its sealed receipt.
