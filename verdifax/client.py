@@ -791,6 +791,15 @@ class VerdifaxClient:
         path = f"/public/runs/{quote(token, safe='')}/bundle.json"
         return checked_response(self._get(path)).text
 
+    def get_public_receipt_by_token(self, token: str) -> str:
+        """The sealed receipt of a published stopped run (a refusal, a halt
+        or a failure) a share token points to, as sent: the same document the
+        key holder reads from the run's receipt route. No API key needed."""
+        if not token:
+            raise ValidationError("token is required")
+        path = f"/public/runs/{quote(token, safe='')}/receipt.json"
+        return checked_response(self._get(path)).text
+
     def list_deletion_receipts(self, run_id: int) -> list[dict[str, Any]]:
         """The CRES deletion receipts bound to a run."""
         body = self._get_json(run_path(run_id, "/deletion-receipts"))
@@ -1288,7 +1297,9 @@ class VerdifaxClient:
 
         Returns:
             The server's object: ``ok``, ``run_id``, ``public``,
-            ``public_bundle_url`` while public, ``verify_url`` and
+            ``public_bundle_url`` while public and the run has a bundle, or
+            ``public_receipt_url`` while public and the run stopped (R156),
+            ``verify_url`` and
             ``publication``, the sealed record or ``None``. Save
             ``publication`` as sent; ``verdifax-verify --signals`` reads it
             since v0.24.0.

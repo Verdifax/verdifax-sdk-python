@@ -573,6 +573,13 @@ class AsyncVerdifaxClient:
         path = f"/public/runs/{quote(token, safe='')}/bundle.json"
         return checked_response(await self._get(path)).text
 
+    async def get_public_receipt_by_token(self, token: str) -> str:
+        """Async version of :meth:`VerdifaxClient.get_public_receipt_by_token`."""
+        if not token:
+            raise ValidationError("token is required")
+        path = f"/public/runs/{quote(token, safe='')}/receipt.json"
+        return checked_response(await self._get(path)).text
+
     async def list_deletion_receipts(self, run_id: int) -> list[dict[str, Any]]:
         """Async version of :meth:`VerdifaxClient.list_deletion_receipts`."""
         body = await self._get_json(run_path(run_id, "/deletion-receipts"))

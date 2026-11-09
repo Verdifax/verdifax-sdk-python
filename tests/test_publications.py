@@ -63,3 +63,20 @@ def test_publish_refuses_a_bad_id_before_sending():
 def test_the_publication_kinds_are_signal_kinds():
     assert "run.published" in SIGNAL_KINDS and "run.unpublished" in SIGNAL_KINDS
     assert isinstance(VerdifaxClient, type)
+
+
+def test_publishing_a_stopped_run_returns_its_receipt_address():
+    """A stopped run is published as its receipt: the answer names the
+    receipt address and no bundle address (R156)."""
+    stopped = {
+        "ok": True,
+        "run_id": 42,
+        "public": True,
+        "public_receipt_url": "https://api.verdifax.com/public/runs/tok/receipt.json",
+        "verify_url": "https://verdifax.com/verify/?pt=tok&record=receipt",
+        "publication": None,
+    }
+    client = sync_client(responder([], body=stopped))
+    answer = client.publish_run(42)
+    assert answer["public_receipt_url"] == stopped["public_receipt_url"]
+    assert "public_bundle_url" not in answer

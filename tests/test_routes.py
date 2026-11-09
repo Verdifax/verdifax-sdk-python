@@ -58,6 +58,7 @@ ROUTES = [
     ("get_run_artifacts", (7,), "/runs/7/artifacts"),
     ("get_public_bundle", (7,), "/runs/7/bundle.json"),
     ("get_public_bundle_by_token", ("a b/c",), "/public/runs/a%20b%2Fc/bundle.json"),
+    ("get_public_receipt_by_token", ("a b/c",), "/public/runs/a%20b%2Fc/receipt.json"),
     ("list_deletion_receipts", (7,), "/runs/7/deletion-receipts"),
     ("admin_list_keys", (), "/admin/keys"),
 ]

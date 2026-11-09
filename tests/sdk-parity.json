@@ -795,6 +795,23 @@
         "verdifax_get_public_bundle_by_token"
       ]
     },
+    "GET /public/runs/{token}/receipt.json": {
+      "go": [
+        "GetPublicReceiptByToken"
+      ],
+      "node": [
+        "getPublicReceiptByToken"
+      ],
+      "python": [
+        "get_public_receipt_by_token"
+      ],
+      "python_async": [
+        "get_public_receipt_by_token"
+      ],
+      "r": [
+        "verdifax_get_public_receipt_by_token"
+      ]
+    },
     "GET /runs": {
       "go": [
         "ListRuns"

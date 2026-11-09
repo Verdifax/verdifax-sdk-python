@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.0
+
+A published stopped run is served as its sealed receipt.
+
+- `publish_run` and `unpublish_run` return `public_receipt_url`, the address of a stopped run's receipt while it is public, `/public/runs/{token}/receipt.json`; a stopped run has no bundle address, so `public_bundle_url` is absent for it. `verdifax-verify` checks the receipt address as it checks a saved receipt.
+- `get_public_receipt_by_token(token)`, sync and async, reads a published stopped run's sealed receipt from `GET /public/runs/{token}/receipt.json`, as the exact text the server sent, with no key.
+
 ## 1.6.1
 
 The same code as 1.6.0, which was tagged but never published: its release job stopped at the formatting check on two test files. This release formats them and publishes.
