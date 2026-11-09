@@ -76,6 +76,13 @@ class APIError(VerdifaxError):
         value = (self.response_body or {}).get("record_hash")
         return value if isinstance(value, str) and value else None
 
+    @property
+    def aivp_trace_text(self) -> Optional[str]:
+        """The text the AI review checked, on a run its review halted: returned
+        once, and the halt receipt seals its hash."""
+        value = (self.response_body or {}).get("aivp_trace_text")
+        return value if isinstance(value, str) and value else None
+
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"APIError(status_code={self.status_code!r}, message={self.message!r})"
 

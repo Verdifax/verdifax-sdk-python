@@ -104,6 +104,36 @@ class StageResult(_AliasedModel):
     )
 
 
+class AivpFinding(BaseModel):
+    """The contradiction the AI review's checker found: two trace nodes, by
+    id, and the opposing terms in them."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    node_a: str
+    node_b: str
+    term: str
+    opposite: str
+
+
+class AivpReview(BaseModel):
+    """The AI review's record of one answer it read: the review setup, the
+    SHA-256 of the trace it checked, the checker, what the account policy
+    chose a contradiction finding does (``halt`` or ``record``), the outcome
+    (``clean``, ``halted`` or ``recorded``) and the finding."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    formula: str
+    prompt_id: str
+    model: str
+    trace_hash: str
+    checker_id: str
+    contradiction_mode: str
+    contradiction_outcome: str
+    finding: Optional[AivpFinding] = None
+
+
 class ExecutionManifest(_AliasedModel):
     """The complete cryptographic manifest of one orchestrated pipeline run.
 
@@ -158,6 +188,11 @@ class ExecutionManifest(_AliasedModel):
 
     # Sealing hash
     manifest_hash: str = Field(..., alias="ManifestHash")
+
+    # The AI review's record, on runs sealed since the server's v1.10
+    # manifest formula; None on earlier runs and when no review ran.
+    aivp_review_form: Optional[str] = Field(default=None, alias="AivpReviewForm")
+    aivp_review: Optional[AivpReview] = Field(default=None, alias="AivpReview")
 
     def kernel_executions(self) -> dict[str, str]:
         """Return a name→ID map for the six DKEC kernels."""
@@ -277,6 +312,13 @@ class AttestationReceipt(_AliasedModel):
         default=None,
         description="the exact signed text, for verdifax-verify --request, when signed",
     )
+    aivp_trace_text: Optional[str] = Field(
+        default=None,
+        description=(
+            "the text the AI review checked, returned once and not stored; its SHA-256 "
+            "is sealed in manifest.aivp_review. Keep it for verdifax-verify --aivp-trace"
+        ),
+    )
 
     @classmethod
     def from_api_response(
@@ -297,6 +339,7 @@ class AttestationReceipt(_AliasedModel):
                 or None
             ),
             signed_request=signed_request,
+            aivp_trace_text=body.get("aivp_trace_text") or None,
         )
 
 
@@ -717,6 +760,7 @@ class ExecuteBatchResult(_AliasedModel):
     macc_halt_receipt: Optional[dict[str, Any]] = None
     aivp_t4_halt_receipt: Optional[dict[str, Any]] = None
     attestation_gap_receipt: Optional[dict[str, Any]] = None
+    aivp_trace_text: Optional[str] = None
 
 
 class ExecuteBatchResponse(_AliasedModel):
