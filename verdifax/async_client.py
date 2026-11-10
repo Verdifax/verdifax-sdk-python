@@ -28,11 +28,13 @@ import httpx
 
 from ._requests import (
     ACCOUNT_PATH,
+    ACCOUNT_TIME_ZONE_PATH,
     ACCOUNT_POLICIES_PATH,
     POLICIES_PATH,
     BatchRow,
     account_key_body,
     account_key_path,
+    account_time_zone_body,
     activation_record,
     admin_account_body,
     admin_accounts,
@@ -48,7 +50,9 @@ from ._requests import (
     policy_test_body,
     policy_upload_body,
     provider_attest_args,
+    public_report_path,
     query_params,
+    report_request,
     refuse_unsigned_account_change,
     run_path,
 )
@@ -553,10 +557,25 @@ class AsyncVerdifaxClient:
         report: dict[str, Any] = body["report"]
         return report
 
-    async def download_audit_pdf(self, run_id: int, format: str = "comprehensive") -> bytes:
+    async def download_audit_pdf(
+        self, run_id: int, format: str = "comprehensive", ai_output_text: Optional[str] = None
+    ) -> bytes:
         """Async version of :meth:`VerdifaxClient.download_audit_pdf`."""
-        path = run_path(run_id, "/report.pdf")
-        return checked_response(await self._get(path, {"format": format})).content
+        return await self._report_pdf(run_path(run_id, "/report.pdf"), format, ai_output_text)
+
+    async def download_public_audit_pdf(
+        self, token: str, format: str = "comprehensive", ai_output_text: Optional[str] = None
+    ) -> bytes:
+        """Async version of :meth:`VerdifaxClient.download_public_audit_pdf`."""
+        return await self._report_pdf(public_report_path(token), format, ai_output_text)
+
+    async def _report_pdf(self, path: str, format: str, ai_output_text: Optional[str]) -> bytes:
+        method, params, body = report_request(format, ai_output_text)
+        try:
+            response = await self._http.request(method, path, params=params, json=body)
+        except httpx.HTTPError as exc:
+            raise wrap_transport_error(exc) from exc
+        return checked_response(response).content
 
     async def get_run_artifacts(self, run_id: int) -> str:
         """Async version of :meth:`VerdifaxClient.get_run_artifacts`."""
@@ -608,9 +627,10 @@ class AsyncVerdifaxClient:
         inputs: Mapping[str, Any],
         document: Optional[str] = None,
         document_hash: Optional[str] = None,
+        ai_output_declared: bool = False,
     ) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.test_policy`. It seals nothing."""
-        body = policy_test_body(inputs, document, document_hash)
+        body = policy_test_body(inputs, document, document_hash, ai_output_declared)
         return await self._send_json("POST", f"{POLICIES_PATH}/test", body)
 
     async def get_policy_history(self) -> list[dict[str, Any]]:
@@ -636,6 +656,12 @@ class AsyncVerdifaxClient:
     async def get_account(self) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.get_account`."""
         return await self._get_json(ACCOUNT_PATH)
+
+    async def set_account_time_zone(self, time_zone: str) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.set_account_time_zone`."""
+        return await self._send_json(
+            "PUT", ACCOUNT_TIME_ZONE_PATH, account_time_zone_body(time_zone)
+        )
 
     async def create_account_key(
         self, name: str, expires_at: Optional[str] = None
@@ -708,9 +734,10 @@ class AsyncVerdifaxClient:
         inputs: Mapping[str, Any],
         document: Optional[str] = None,
         document_hash: Optional[str] = None,
+        ai_output_declared: bool = False,
     ) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.test_account_policy`. It seals nothing."""
-        body = policy_test_body(inputs, document, document_hash)
+        body = policy_test_body(inputs, document, document_hash, ai_output_declared)
         return await self._send_json("POST", f"{ACCOUNT_POLICIES_PATH}/test", body)
 
     async def get_account_policy_history(self) -> list[dict[str, Any]]:

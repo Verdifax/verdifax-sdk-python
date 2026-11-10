@@ -812,6 +812,23 @@
         "verdifax_get_public_receipt_by_token"
       ]
     },
+    "GET /public/runs/{token}/report.pdf": {
+      "go": [
+        "DownloadPublicAuditPDF"
+      ],
+      "node": [
+        "downloadPublicAuditPDF"
+      ],
+      "python": [
+        "download_public_audit_pdf"
+      ],
+      "python_async": [
+        "download_public_audit_pdf"
+      ],
+      "r": [
+        "verdifax_download_public_audit_pdf"
+      ]
+    },
     "GET /runs": {
       "go": [
         "ListRuns"
@@ -1512,6 +1529,40 @@
         "verdifax_activate_policy"
       ]
     },
+    "POST /public/runs/{token}/report.pdf": {
+      "go": [
+        "DownloadPublicAuditPDF"
+      ],
+      "node": [
+        "downloadPublicAuditPDF"
+      ],
+      "python": [
+        "download_public_audit_pdf"
+      ],
+      "python_async": [
+        "download_public_audit_pdf"
+      ],
+      "r": [
+        "verdifax_download_public_audit_pdf"
+      ]
+    },
+    "POST /runs/{id}/report.pdf": {
+      "go": [
+        "DownloadAuditPDFWithAnswer"
+      ],
+      "node": [
+        "downloadAuditPDF"
+      ],
+      "python": [
+        "download_audit_pdf"
+      ],
+      "python_async": [
+        "download_audit_pdf"
+      ],
+      "r": [
+        "verdifax_download_audit_pdf"
+      ]
+    },
     "POST /signoffs": {
       "go": [
         "SignOff"
@@ -1561,6 +1612,23 @@
       ],
       "r": [
         "verdifax_unpublish_run"
+      ]
+    },
+    "PUT /account/time-zone": {
+      "go": [
+        "SetAccountTimeZone"
+      ],
+      "node": [
+        "setAccountTimeZone"
+      ],
+      "python": [
+        "set_account_time_zone"
+      ],
+      "python_async": [
+        "set_account_time_zone"
+      ],
+      "r": [
+        "verdifax_set_account_time_zone"
       ]
     }
   },

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, Union
 
 import httpx
@@ -215,6 +216,31 @@ def batch_response(
     return ExecuteBatchResponse.model_validate({**parsed, "results": results})
 
 
+def report_request(
+    format: str, ai_output_text: Optional[str]
+) -> tuple[str, Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+    """The method, query and body of an audit PDF request.
+
+    Without ``ai_output_text`` it is a GET with the format. With it, a POST
+    carrying the format and the AI's exact answer, which the server prints
+    on the report's first page, marked as supplied by the caller, only when
+    its SHA-256 is the hash the record seals; any other text is refused
+    with a 422 and nothing is printed. Verdifax stores only the hash.
+    """
+    if ai_output_text is None:
+        return "GET", {"format": format}, None
+    if not isinstance(ai_output_text, str) or ai_output_text == "":
+        raise ValidationError("ai_output_text must be the AI's exact answer, a non-empty string")
+    return "POST", None, {"format": format, "ai_output_text": ai_output_text}
+
+
+def public_report_path(token: str) -> str:
+    """``/public/runs/{token}/report.pdf`` for a share token."""
+    if not token:
+        raise ValidationError("token is required")
+    return f"/public/runs/{quote(token, safe='')}/report.pdf"
+
+
 def run_path(run_id: int, suffix: str = "") -> str:
     """Validate ``run_id`` and build ``/runs/{run_id}`` with an optional suffix."""
     validate_positive_id(run_id, "run_id")
@@ -299,9 +325,16 @@ def policy_upload_body(document: Any) -> dict[str, str]:
 
 
 def policy_test_body(
-    inputs: Mapping[str, Any], document: Optional[str] = None, document_hash: Optional[str] = None
+    inputs: Mapping[str, Any],
+    document: Optional[str] = None,
+    document_hash: Optional[str] = None,
+    ai_output_declared: bool = False,
 ) -> dict[str, Any]:
     """The body of ``POST /policies/test``, with exactly one of the two documents.
+
+    ``ai_output_declared`` says whether the request being tried declares an
+    AI output, as ``ai_output_text`` does on a run: a policy that requires an
+    AI review refuses a step without one. It is sent only when true.
 
     Raises:
         ValidationError: If both or neither of ``document`` and
@@ -319,6 +352,10 @@ def policy_test_body(
         body["document_hash"] = document_hash
     else:
         body["document"] = _policy_document(document)
+    if not isinstance(ai_output_declared, bool):
+        raise ValidationError("ai_output_declared must be a bool")
+    if ai_output_declared:
+        body["ai_output_declared"] = True
     return body
 
 
@@ -378,6 +415,7 @@ def activation_record(response_body: Mapping[str, Any]) -> dict[str, Any]:
 
 
 ACCOUNT_PATH = "/account"
+ACCOUNT_TIME_ZONE_PATH = "/account/time-zone"
 
 
 def _account_name(name: Any) -> str:
@@ -555,6 +593,7 @@ def governed_text(response: Union[str, bytes]) -> str:
 
 __all__ = [
     "ACCOUNT_PATH",
+    "ACCOUNT_TIME_ZONE_PATH",
     "ACCOUNT_POLICIES_PATH",
     "BatchRow",
     "MAX_BATCH_ROWS",
@@ -587,4 +626,21 @@ __all__ = [
     "reproducibility_block",
     "run_path",
     "with_attested_flag",
+    "account_time_zone_body",
 ]
+
+
+def account_time_zone_body(time_zone: str) -> dict[str, Any]:
+    """The body of ``PUT /account/time-zone``: an IANA zone such as
+    ``Europe/London``, ``"none"`` for UTC alone, or ``""`` for the zone of the
+    server's region. The server checks the zone loads.
+
+    Raises:
+        ValidationError: If ``time_zone`` is not a ``str`` or is longer than
+            64 characters.
+    """
+    if not isinstance(time_zone, str):
+        raise ValidationError(f"time_zone must be a str, got {type(time_zone).__name__}")
+    if len(time_zone) > 64:
+        raise ValidationError("time_zone is longer than 64 characters")
+    return {"time_zone": time_zone}

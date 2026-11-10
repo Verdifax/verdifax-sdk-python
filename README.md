@@ -104,7 +104,8 @@ asyncio.run(main())
 | `export_runs_csv(from_, to, job_id)` | `GET /runs/export?format=csv` | required |
 | `get_run_artifacts(run_id)` | `GET /runs/{run_id}/artifacts` | required |
 | `get_run_report(run_id)` | `GET /runs/{run_id}/report` | required |
-| `download_audit_pdf(run_id, format)` | `GET /runs/{run_id}/report.pdf` | required |
+| `download_audit_pdf(run_id, format, ai_output_text=None)` | `GET /runs/{run_id}/report.pdf`, or `POST` with the AI's answer, printed when its SHA-256 is the sealed hash | required |
+| `download_public_audit_pdf(token, format, ai_output_text=None)` | `GET` or `POST /public/runs/{token}/report.pdf` | none |
 | `get_allow_token(run_id)` | `GET /runs/{run_id}/allow-token` | required |
 | `get_deny_receipt(run_id)` | `GET /runs/{run_id}/deny-receipt` | required |
 | `get_ccv_halt_receipt(run_id)` | `GET /runs/{run_id}/ccv-halt-receipt` | required |

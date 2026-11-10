@@ -423,6 +423,8 @@ def test_the_helpers_are_exported():
         "key.revoked",
         "run.published",
         "run.unpublished",
+        "chain.gap",
+        "run.sealed",
     )
 
 
@@ -1120,23 +1122,34 @@ def test_the_readme_states_the_signal_feed_facts():
         assert f"`verdifax.{name}(" in section, name
 
 
-def test_the_changelog_opens_with_1_9_0_and_the_earlier_releases_follow():
+def test_the_changelog_opens_with_1_10_0_and_the_earlier_releases_follow():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     newest = changelog.split("\n## ", 2)[1]
-    assert newest.startswith("1.9.0\n")
-    assert "aivp_trace_text" in newest
+    assert newest.startswith("1.10.0\n")
+    for phrase in (
+        "run.sealed",
+        "chain.gap",
+        "ai_output_declared",
+        "download_public_audit_pdf",
+        "set_account_time_zone",
+        "v0.28.0",
+    ):
+        assert phrase in newest, phrase
     entry = changelog.split("\n## ", 3)[2]
+    assert entry.startswith("1.9.0\n")
+    assert "aivp_trace_text" in entry
+    entry = changelog.split("\n## ", 4)[3]
     assert entry.startswith("1.8.0\n")
     assert "decided_by" in entry
-    entry = changelog.split("\n## ", 4)[3]
+    entry = changelog.split("\n## ", 5)[4]
     assert entry.startswith("1.7.0\n")
     assert "public_receipt_url" in entry
-    assert changelog.split("\n## ", 5)[4].startswith("1.6.1\n")
-    entry = changelog.split("\n## ", 6)[5]
+    assert changelog.split("\n## ", 6)[5].startswith("1.6.1\n")
+    entry = changelog.split("\n## ", 7)[6]
     assert entry.startswith("1.6.0\n")
     for phrase in ("publish_run", "unpublish_run", "run.published", "run.unpublished", "v0.24.0"):
         assert phrase in entry, phrase
-    entry = changelog.split("\n## ", 7)[6]
+    entry = changelog.split("\n## ", 8)[7]
     assert entry.startswith("1.5.0\n")
     for phrase in (
         "feed keys",

@@ -160,6 +160,64 @@ async def test_async_download_audit_pdf_and_error():
     assert caught.value.status_code == 404
 
 
+def _report_handler(seen: list[httpx.Request]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.content and json.loads(request.content).get("ai_output_text") == "wrong":
+            return httpx.Response(
+                422, json={"error": "supplied answer refused: nothing was printed"}
+            )
+        return httpx.Response(
+            200, content=b"%PDF-report", headers={"Content-Type": "application/pdf"}
+        )
+
+    return handler
+
+
+def test_reports_carry_the_answer_when_given():
+    seen: list[httpx.Request] = []
+    client = sync_client(_report_handler(seen))
+    assert client.download_audit_pdf(7, "brief", ai_output_text="the answer") == b"%PDF-report"
+    assert client.download_public_audit_pdf("a b", "legal") == b"%PDF-report"
+    assert client.download_public_audit_pdf("tok", ai_output_text="the answer") == b"%PDF-report"
+    got = [
+        (r.method, r.url.raw_path.decode(), json.loads(r.content) if r.content else None)
+        for r in seen
+    ]
+    assert got == [
+        ("POST", "/runs/7/report.pdf", {"format": "brief", "ai_output_text": "the answer"}),
+        ("GET", "/public/runs/a%20b/report.pdf?format=legal", None),
+        (
+            "POST",
+            "/public/runs/tok/report.pdf",
+            {"format": "comprehensive", "ai_output_text": "the answer"},
+        ),
+    ]
+    with pytest.raises(APIError) as caught:
+        client.download_audit_pdf(7, ai_output_text="wrong")
+    assert caught.value.status_code == 422
+    for call in (
+        lambda: client.download_audit_pdf(7, ai_output_text=""),
+        lambda: client.download_public_audit_pdf(""),
+    ):
+        with pytest.raises(ValidationError):
+            call()
+
+
+async def test_async_reports_carry_the_answer_when_given():
+    seen: list[httpx.Request] = []
+    async with async_client(_report_handler(seen)) as client:
+        assert await client.download_audit_pdf(7, ai_output_text="the answer") == b"%PDF-report"
+        assert await client.download_public_audit_pdf("tok", "auditor") == b"%PDF-report"
+        with pytest.raises(APIError):
+            await client.download_public_audit_pdf("tok", ai_output_text="wrong")
+    assert [(r.method, r.url.path) for r in seen] == [
+        ("POST", "/runs/7/report.pdf"),
+        ("GET", "/public/runs/tok/report.pdf"),
+        ("POST", "/public/runs/tok/report.pdf"),
+    ]
+
+
 def test_dcae_verify_posts_the_bundle():
     seen: list[httpx.Request] = []
     out = sync_client(responder(seen, body={"verified": True})).dcae_verify(PROOF_BUNDLE)

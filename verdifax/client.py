@@ -24,11 +24,13 @@ import httpx
 
 from ._requests import (
     ACCOUNT_PATH,
+    ACCOUNT_TIME_ZONE_PATH,
     ACCOUNT_POLICIES_PATH,
     POLICIES_PATH,
     BatchRow,
     account_key_body,
     account_key_path,
+    account_time_zone_body,
     activation_record,
     admin_account_body,
     admin_accounts,
@@ -45,7 +47,9 @@ from ._requests import (
     policy_test_body,
     policy_upload_body,
     provider_attest_args,
+    public_report_path,
     query_params,
+    report_request,
     refuse_origin_hashes,
     refuse_unsigned_account_change,
     reproducibility_block,
@@ -771,10 +775,31 @@ class VerdifaxClient:
         report: dict[str, Any] = body["report"]
         return report
 
-    def download_audit_pdf(self, run_id: int, format: str = "comprehensive") -> bytes:
-        """The audit PDF bytes. ``format`` is brief, auditor, legal or comprehensive."""
-        path = run_path(run_id, "/report.pdf")
-        return checked_response(self._get(path, {"format": format})).content
+    def download_audit_pdf(
+        self, run_id: int, format: str = "comprehensive", ai_output_text: Optional[str] = None
+    ) -> bytes:
+        """The audit PDF bytes. ``format`` is brief, auditor, legal or comprehensive.
+
+        With ``ai_output_text``, the AI's exact answer, the report prints it on
+        its first page, marked as supplied by the caller, only when its SHA-256
+        is the hash the record seals; other text raises APIError (422).
+        """
+        return self._report_pdf(run_path(run_id, "/report.pdf"), format, ai_output_text)
+
+    def download_public_audit_pdf(
+        self, token: str, format: str = "comprehensive", ai_output_text: Optional[str] = None
+    ) -> bytes:
+        """The audit PDF of a published record a share token points to, with
+        the answer printed as :meth:`download_audit_pdf` prints it. No API key needed."""
+        return self._report_pdf(public_report_path(token), format, ai_output_text)
+
+    def _report_pdf(self, path: str, format: str, ai_output_text: Optional[str]) -> bytes:
+        method, params, body = report_request(format, ai_output_text)
+        try:
+            response = self._http.request(method, path, params=params, json=body)
+        except httpx.HTTPError as exc:
+            raise wrap_transport_error(exc) from exc
+        return checked_response(response).content
 
     def get_run_artifacts(self, run_id: int) -> str:
         """The sealed audit bundle as the exact JSON text the server sent."""
@@ -861,6 +886,7 @@ class VerdifaxClient:
         inputs: Mapping[str, Any],
         document: Optional[str] = None,
         document_hash: Optional[str] = None,
+        ai_output_declared: bool = False,
     ) -> dict[str, Any]:
         """Show which rule would fire on sample inputs, with ``POST /policies/test``.
 
@@ -877,7 +903,7 @@ class VerdifaxClient:
             APIError: For a non-2xx response.
             ConnectionError: If the API was unreachable.
         """
-        body = policy_test_body(inputs, document, document_hash)
+        body = policy_test_body(inputs, document, document_hash, ai_output_declared)
         return self._send_json("POST", f"{POLICIES_PATH}/test", body)
 
     def get_policy_history(self) -> list[dict[str, Any]]:
@@ -939,6 +965,25 @@ class VerdifaxClient:
             the account's policy changes.
         """
         return self._get_json(ACCOUNT_PATH)
+
+    def set_account_time_zone(self, time_zone: str) -> dict[str, Any]:
+        """Choose the second time zone the account's audit reports show beside
+        UTC, with ``PUT /account/time-zone``.
+
+        Needs the account's owner key. Pass an IANA zone such as
+        ``Europe/London``, ``"none"`` for UTC alone, or ``""`` to go back to
+        the zone of the server's region, which an account that never chose
+        sees. It changes how times are displayed, never a sealed value.
+
+        Returns:
+            The server's object: ``ok``, ``account_id`` and ``time_zone``.
+
+        Raises:
+            ValidationError: If ``time_zone`` is not a ``str`` or is too long.
+            APIError: For a non-2xx response, such as a zone the server does
+                not know (400).
+        """
+        return self._send_json("PUT", ACCOUNT_TIME_ZONE_PATH, account_time_zone_body(time_zone))
 
     def create_account_key(self, name: str, expires_at: Optional[str] = None) -> dict[str, Any]:
         """Create a member key in the account with ``POST /account/keys``.
@@ -1090,13 +1135,14 @@ class VerdifaxClient:
         inputs: Mapping[str, Any],
         document: Optional[str] = None,
         document_hash: Optional[str] = None,
+        ai_output_declared: bool = False,
     ) -> dict[str, Any]:
         """Show which rule would fire on sample inputs, with ``POST /account/policies/test``.
 
         Works as :meth:`test_policy`, on the account's documents. It seals
         nothing.
         """
-        body = policy_test_body(inputs, document, document_hash)
+        body = policy_test_body(inputs, document, document_hash, ai_output_declared)
         return self._send_json("POST", f"{ACCOUNT_POLICIES_PATH}/test", body)
 
     def get_account_policy_history(self) -> list[dict[str, Any]]:

@@ -57,6 +57,11 @@ SIGNAL_KINDS = (
     "key.revoked",
     "run.published",
     "run.unpublished",
+    # A restore from backup made one of the account's chains skip places
+    # its entries may have held; the gap is sealed and on the public log.
+    "chain.gap",
+    # A successful run, so the feed is a complete account ledger.
+    "run.sealed",
 )
 SIGNALS_PATH = "/signals"
 ACCOUNT_SIGNALS_PATH = "/account/signals"
