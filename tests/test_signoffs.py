@@ -822,3 +822,72 @@ def test_the_readme_states_the_signoff_facts():
     for name in ("approver_key_proof", "signoff_preimage"):
         assert f"`verdifax.{name}(" in section, name
     assert "\u2014" not in section and "\u2013" not in section
+
+
+# Round 57, N5 and R130: a number above 2^53 in any chain record comes back
+# exactly, from the sign-off, policy and feed readers, sync and async.
+BIG = 9007199254740993
+BIG_RECORD = (
+    '{"format":"verdifax.signoff.v1","sequence":1,"a_later_count":9007199254740993,'
+    '"signal":{"signal_account":"account-7","signal_sequence":5,"signal_previous_hash":"'
+    + "0" * 64
+    + '"}}'
+)
+
+
+def _raw(text: str) -> Any:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=text, headers={"Content-Type": "application/json"})
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: c.get_signoffs(42),
+        lambda c: c.get_signoff_history(),
+        lambda c: c.get_policy_history(),
+        lambda c: c.get_account_policy_history(),
+    ],
+)
+def test_chain_records_keep_numbers_past_2_to_the_53(call):
+    from tests.test_parity import async_client as raw_async, sync_client as raw_sync
+
+    text = "[" + BIG_RECORD + "]"
+    got = call(raw_sync(_raw(text)))
+    assert got[0]["a_later_count"] == BIG
+    assert json.dumps(got, separators=(",", ":")) == text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: c.get_signoffs(42),
+        lambda c: c.get_signoff_history(),
+        lambda c: c.get_policy_history(),
+        lambda c: c.get_account_policy_history(),
+    ],
+)
+async def test_async_chain_records_keep_numbers_past_2_to_the_53(call):
+    from tests.test_parity import async_client as raw_async
+
+    client = raw_async(_raw("[" + BIG_RECORD + "]"))
+    try:
+        got = await call(client)
+    finally:
+        await client.close()
+    assert got[0]["a_later_count"] == BIG
+
+
+def test_the_feed_keeps_numbers_past_2_to_the_53():
+    from tests.test_parity import sync_client as raw_sync
+
+    page = (
+        '{"events":[{"id":"e1","data":{"sequence":1,"kind":"run.sealed","entry":'
+        + BIG_RECORD
+        + '}}],"next_after":1,"newest":1}'
+    )
+    got = raw_sync(_raw(page)).get_signals()
+    assert got["events"][0]["data"]["entry"]["a_later_count"] == BIG

@@ -62,6 +62,10 @@ SIGNAL_KINDS = (
     "chain.gap",
     # A successful run, so the feed is a complete account ledger.
     "run.sealed",
+    # A sign-off or policy change the public log never confirmed: its place
+    # in its chain is closed by a sealed, anchored record naming the entry
+    # it would have made.
+    "chain.interrupted",
 )
 SIGNALS_PATH = "/signals"
 ACCOUNT_SIGNALS_PATH = "/account/signals"
