@@ -24,7 +24,7 @@ receipt = verdifax.attest(
 print(receipt.manifest_hash)
 ```
 
-That's it. The receipt's `manifest_hash` is a 64-char SHA-256 that seals every input, every kernel execution ID, the hardware attestation, the ZK transcript, the formal verifier status, and the final VFA. You can later ask the server to re-derive it from the run's stored manifest with `verify_run(receipt.run_id)`; see [Verification](#verification).
+That's it. The receipt's `manifest_hash` is a 64-char SHA-256 that seals the envelope (the payload's hash, the program and the route), every kernel execution ID, the hardware attestation hash, the ZK transcript hash, the formal verifier status and the final VFA hash, among other fields. The context blocks you declare (`attested_context`, `request_substance` and the others) are sealed by their own section hashes in the run's audit bundle, not by the manifest hash. You can later ask the server to re-derive it from the run's stored manifest with `verify_run(receipt.run_id)`; see [Verification](#verification).
 
 ## Versioning
 
@@ -131,6 +131,7 @@ asyncio.run(main())
 | `get_policy_history()` | `GET /policies/history` | required |
 | `activate_policy(document_hash)` | `GET /policies`, then `POST /policies/{document_hash}/activate` | required |
 | `get_account()` | `GET /account` | owner key |
+| `set_account_setting(setting, value, account_id=None)` | `GET /account` unless `account_id` is given, then `PUT /account/settings/{setting}`, signed by the owner key's request key | owner key |
 | `create_account_key(name, expires_at=None)` | `POST /account/keys` | owner key |
 | `list_account_keys()` | `GET /account/keys` | owner key |
 | `revoke_account_key(key_id)` | `DELETE /account/keys/{id}` | owner key |
@@ -145,6 +146,7 @@ asyncio.run(main())
 | `test_account_policy(inputs, document=None, document_hash=None)` | `POST /account/policies/test` | owner key |
 | `get_account_policy_history()` | `GET /account/policies/history` | owner key |
 | `activate_account_policy(document_hash)` | `GET /account/policies`, then `POST /account/policies/{document_hash}/activate` | owner key |
+| `delete_run(run_id, record_hash, account_id=None)` | `GET /account` unless `account_id` is given, then `POST /account/runs/{run_id}/delete`, signed by the owner key's request key | owner key |
 | `register_approver(name, approver_key)` | `POST /account/approvers` | owner key |
 | `list_approvers()` | `GET /account/approvers` | owner key |
 | `revoke_approver(approver_id)` | `DELETE /account/approvers/{id}` | owner key |
@@ -167,9 +169,11 @@ asyncio.run(main())
 | `admin_list_keys()` | `GET /admin/keys` | admin |
 | `admin_revoke_key(key_id)` | `DELETE /admin/keys/{id}` | admin |
 | `admin_clear_request_key(key_id)` | `DELETE /admin/keys/{id}/request-key` | admin |
+| `admin_delete_run(run_id)` | `POST /admin/runs/{id}/delete` | admin |
+| `admin_replace_owner_key(account_id)` | `POST /admin/accounts/{id}/owner-key/replace` | admin |
 | `admin_erase(...)` | `POST /admin/erase` | admin |
 
-These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `policy_activation_preimage`, `policy_activation_approval`, `signoff_preimage`, `approver_key_proof`, `signal_event_hash`, `verify_webhook`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
+These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `policy_activation_preimage`, `owner_change_preimage`, `policy_activation_approval`, `signoff_preimage`, `approver_key_proof`, `signal_event_hash`, `verify_webhook`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
 
 `get_run_artifacts`, `get_public_bundle` and `get_public_bundle_by_token` return the exact JSON text the server sent, so you can save it and check it with `verdifax-verify`.
 
@@ -243,7 +247,7 @@ A job map covers what was sent. It cannot show a step that was never sent.
 
 ## Determinism check
 
-`client.verify_determinism(...)` runs one payload twice on the server and compares the manifest hashes. `deterministic` is true when both runs ended `ok` and the two hashes match. Both runs are recorded, with the status `probe`. `verdifax.research.verify_determinism(client, ...)` is the same call for a sync client.
+`client.verify_determinism(...)` runs one payload twice on the server and compares the manifest hashes. `deterministic` is true when both runs ended `ok` and the two hashes match. Both runs are recorded, with the status `probe`, or `stage_error` for a replay that sealed nothing or whose record could not be anchored on the probe's in-process ledger. `verdifax.research.verify_determinism(client, ...)` is the same call for a sync client.
 
 ## Verification
 
@@ -264,7 +268,7 @@ assert result.verified, result
 
 ## Request signing
 
-A trial key, which is what a pilot receives, needs a request key: it seals nothing until one is registered, and the key can then be replaced but not cleared. On a production key, request signing is optional, and a client with no signing key sends the same requests as before.
+A trial key, which is what a pilot receives, needs a request key: it seals nothing until one is registered. Its holder can then replace the request key but not clear it; only Verdifax can clear it, for a holder who lost it, after which the trial key again seals nothing until a new one is registered, and for a key in an account the clearing is sealed in that account's feed as an account change. On a production key, request signing is optional, and a client with no signing key sends the same requests as before.
 
 You can register an Ed25519 public key on your API key, so that each run must also be signed with a private key that only you hold. The key pair is created on your machine, and Verdifax receives only the public key. Signing needs the `cryptography` package:
 
@@ -448,6 +452,27 @@ The account policy methods take the same arguments and return the same objects a
 
 An administrator can put a new customer key in an existing account with `admin_create_key(name, account_id=7)`, where `7` is the number in `account-7`. Without `account_id`, the key gets an account of its own. A key never changes account.
 
+### Owner settings and deleting records
+
+The owner decides two blocks on Verdifax. While `owner-replacement` is `blocked`, Verdifax cannot replace or revoke the account's owner key, or start a replacement. While `verdifax-deletion` is `blocked`, Verdifax cannot delete one of the account's records. `get_account()` returns both, as `owner_replacement` and `verdifax_deletion`, each `allowed` or `blocked`.
+
+```python
+owner = VerdifaxClient(api_key=owner_secret, signing_key=owner_signing_key)
+owner.set_account_setting("verdifax-deletion", "blocked")
+owner.set_account_setting("owner-replacement", "blocked")
+
+# The owner deletes one record, naming the exact record it read.
+owner.delete_run(42, record_hash)
+```
+
+`set_account_setting(setting, value, account_id=None)` takes `owner-replacement` or `verdifax-deletion`, and `allowed` or `blocked`; anything else raises `ValidationError` before anything is sent. The answer's `account_change` is the sealed record, or `None` when the value was already set and nothing changed.
+
+`delete_run(run_id, record_hash, account_id=None)` deletes one of the account's records. `record_hash` is the record's hash, 64 lowercase hex characters: a completed run's `record_hash`, or a stopped run's receipt hash. The server refuses a hash that is not the run's with 409, and a public record with 409 until `unpublish_run(run_id)` withdraws it. The owner's own deletions are never blocked. The answer's `run_deletion` is the tombstone, which stays in the account's feed.
+
+Both are signed on this machine by the client's `signing_key`, the owner key's request key, so register it first with `register_account_request_key()`. The record seals the signature. Verdifax never holds the owner's request key, so it cannot make a signature with it, and `verdifax-verify --signals --owner-request-key` confirms every owner change in the feed was signed with the owner's key. A client with no `signing_key` raises `ValidationError` before anything is sent. The signature covers the account's label, which the client reads from `GET /account` unless you pass `account_id`, such as `account-7`. `verdifax.owner_change_preimage(account, change, subject, signed_at, nonce)` returns the signed bytes: `verdifax.owner-change-signature.v1`, the account, the change (`setting.owner_replacement`, `setting.verdifax_deletion` or `run.deleted`), the subject (the value, or `RUN_ID:RECORD_HASH`), the time and the nonce, joined by zero bytes. It makes no request. Each change is placed in the account's signal feed, as an `account.changed` or `run.deleted` event decided by the owner. The client checks the server's answer seals exactly what was sent: the record must carry the change and its value, or the run and its record hash, `decided_by` `owner`, and the owner's signature, time and nonce that were sent, with the public key of this client's `signing_key`. Any other record raises `VerdifaxError`, as `sign_off` does for a record that is not the sign-off sent.
+
+An administrator deletes a record with `admin_delete_run(run_id)`, and starts the replacement of a lost owner key, on the owner's written request, with `admin_replace_owner_key(account_id)`, where `account_id` is the account's number, `7` for `account-7`. The server emails a one-time link to the address of the access request that made the account; the new key is made when the link is opened, shown once to whoever opens it and stored only as a hash, and this call's answer never holds the link or a key. Each is sealed in the account's feed as decided by Verdifax, and the server refuses each (409) while the owner blocks it.
+
 ## Sign-off
 
 An approver signs a decision, approve or reject, on one exact result: a completed run's record, a refused or halted run's receipt, or a whole job by its final step. The approver signs on their own machine with an approver key, and any key in the account submits the sign-off.
@@ -506,7 +531,7 @@ A sign-off shows that the holder of a registered approver key signed that decisi
 
 ## Signal feed
 
-The feed lists every control signal Verdifax recorded for the account, in order: a run refused, halted or failed, a policy changed, a sign-off recorded, an approver key registered or revoked, and a key created or revoked. Each event is a CloudEvent whose `data` carries its `kind`, its `sequence` in the account's feed, the `previous_signal_hash`, its own `event_hash` and the sealed `entry` it names. The feed cannot show a signal Verdifax never recorded.
+The feed lists every control signal Verdifax recorded for the account, in order: a run sealed (`run.sealed`), a run refused, halted or failed, a policy changed, a sign-off recorded, an approver key registered or revoked, a key created or revoked, a record made public or withdrawn (`run.published`, `run.unpublished`), a change to the account or a key's terms (`account.changed`), a record deleted (`run.deleted`), a restore gap (`chain.gap`) and an interrupted entry (`chain.interrupted`). `verdifax.SIGNAL_KINDS` lists every kind. A change records who decided it, the owner or Verdifax; a key change in `verdifax.key-change.v2` carries `decided_by`. Each event is a CloudEvent whose `data` carries its `kind`, its `sequence` in the account's feed, the `previous_signal_hash`, its own `event_hash` and the sealed `entry` it names; an event whose record was deleted carries `entry` null and the record's tombstone in `deleted`. The feed cannot show a signal Verdifax never recorded.
 
 The owner key creates a feed key with `create_feed_key(name, expires_at=None)` and revokes it with `revoke_feed_key(id)`. A feed key reads the feed and nothing else. It reads `GET /signals`, and the owner key reads the same feed with `as_owner=True`.
 
@@ -530,7 +555,7 @@ for event in client.follow_signals(after=last_sequence_read):
 
 Save a page with `json.dump(client.get_signals(), file)`. `verdifax-verify --signals` checks a saved feed. `verdifax.signal_event_hash(kind, entry_hash, account, sequence, previous_signal_hash)` recomputes an event's hash, the hex SHA-256 of `verdifax.signal.v1` and those values joined by zero bytes, and makes no request.
 
-`verdifax.pending_signoffs(events)` returns, in feed order, the run ids whose allowing policy rule requires a person's sign-off (their `run.sealed` event says `signoff_required`) and on which no approval is in force, read as `verdifax-verify` reads it: the latest sign-off on the run's whole job governs when there is one, and otherwise the latest sign-off on its record; a receipt sign-off does not count. Pass the feed from its start, or pages that include each run's sign-offs. It makes no request.
+`verdifax.pending_signoffs(events)` returns, in feed order, the run ids whose allowing policy rule requires a person's sign-off (their `run.sealed` event says `signoff_required`) and on which no approval is in force, read as `verdifax-verify` reads it: the latest sign-off on the run's whole job governs when there is one, and otherwise the latest sign-off on its record; a receipt sign-off does not count. A run whose deletion is in the events given (a `run.deleted` event naming it, at any place) is left out, since its record is gone. Pass the feed from its start, or pages that include each run's sign-offs and deletions. It makes no request.
 
 ### Webhooks
 
@@ -558,7 +583,7 @@ def receive(headers, raw_body):
 
 ## Optional execute fields
 
-`attest`, `execute`, `execute_batch` and `verify_determinism` accept `attested_context`, `reproducibility_context`, `request_substance`, `authorization_chain`, `regulatory_scaffolding` and `causal_graph`. Each is recorded as supplied and Verdifax does not check it. The client derives `attested` and `declared` from the fields you provide. `AttestedContext`, `ReproducibilityContext` and `ExecuteRequest` raise `ValidationError` for a field they do not have, and so does an `attested_context` given as a mapping, because the server would drop a misspelt field with no error. A misspelt keyword argument to `attest`, `execute` or `verify_determinism` raises Python's own `TypeError`. Leave out `request_substance["origin"]["source_ip_hash"]` and `["user_agent_hash"]`: the server computes them. `attest`, `execute` and `verify_determinism` refuse them before sending, and a batch row that sets them fails in `results`.
+`attest`, `execute`, `execute_batch` and `verify_determinism` accept `attested_context`, `reproducibility_context`, `request_substance`, `authorization_chain`, `regulatory_scaffolding` and `causal_graph`. In a completed run's sealed record each is recorded as supplied, except the values the server observes itself (in `request_substance`, `latency.total_ms`, the authentication method and key, and the origin hashes it fills; in `regulatory_scaffolding`, empty data-residency regions it fills), and Verdifax does not check that what you declare is true. A refused or halted run's receipt holds none of these blocks, but its `receipt_context` seals the declared policy inputs (such as subject and object identifiers) when the policy names its author and its rules ran. The client derives `attested` and `declared` from the fields you provide. `AttestedContext`, `ReproducibilityContext` and `ExecuteRequest` raise `ValidationError` for a field they do not have, and so does an `attested_context` given as a mapping, because the server would drop a misspelt field with no error. A misspelt keyword argument to `attest`, `execute` or `verify_determinism` raises Python's own `TypeError`. Leave out `request_substance["origin"]["source_ip_hash"]` and `["user_agent_hash"]`: the server computes them. `attest`, `execute` and `verify_determinism` refuse them before sending, and a batch row that sets them fails in `results`.
 
 They also accept `policy_context` and `expected_policy_hash`, which the client checks before sending: see [Policies](#policies).
 

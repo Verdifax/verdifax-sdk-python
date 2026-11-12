@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 from urllib.parse import quote
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, Union
 
 import httpx
 
-from ._signing import attach_signature, policy_activation_signature
+from ._signing import attach_signature, owner_change_signature, policy_activation_signature
 from ._transport import checked_response, parse_signed_response
 from ._validation import (
     ATTESTED_CONTEXT_FIELDS,
@@ -521,6 +523,226 @@ def refuse_unsigned_account_change(key: "Optional[Ed25519PrivateKey]") -> None:
         )
 
 
+# The owner's two settings, as their routes name them, and the change each
+# signature names (the orchestrator's settingRoutes).
+ACCOUNT_SETTINGS_PATH = "/account/settings"
+ACCOUNT_SETTING_CHANGES = {
+    "owner-replacement": "setting.owner_replacement",
+    "verdifax-deletion": "setting.verdifax_deletion",
+}
+ACCOUNT_SETTING_VALUES = ("allowed", "blocked")
+# The change an owner's deletion signature names: the feed kind of its tombstone.
+RUN_DELETED_CHANGE = "run.deleted"
+# An account's label as records seal it (the orchestrator's AccountLabel).
+_ACCOUNT_LABEL = re.compile(r"account-[1-9][0-9]*")
+
+
+def refuse_unsigned_owner_change(
+    key: "Optional[Ed25519PrivateKey]", method: str
+) -> "Ed25519PrivateKey":
+    """Refuse an owner's setting or deletion from a client with no signing key.
+
+    The server refuses an owner's change that its request key did not sign
+    (400), so that Verdifax, which never holds that key, cannot make one.
+    Returns the key.
+
+    Raises:
+        ValidationError: If ``key`` is ``None``.
+    """
+    if key is None:
+        raise ValidationError(
+            f"{method} needs a client with a signing_key: the owner key's request key "
+            "must sign every setting and deletion the owner decides"
+        )
+    return key
+
+
+def account_setting_change(setting: Any, value: Any) -> str:
+    """Check a setting and its value, and return the change the owner signs.
+
+    Raises:
+        ValidationError: If ``setting`` is not ``owner-replacement`` or
+            ``verdifax-deletion``, or ``value`` is not ``allowed`` or
+            ``blocked``.
+    """
+    if not isinstance(setting, str) or setting not in ACCOUNT_SETTING_CHANGES:
+        raise ValidationError(
+            "setting must be one of " f"{', '.join(ACCOUNT_SETTING_CHANGES)}, got {setting!r}"
+        )
+    if not isinstance(value, str) or value not in ACCOUNT_SETTING_VALUES:
+        raise ValidationError(
+            f"value must be one of {', '.join(ACCOUNT_SETTING_VALUES)}, got {value!r}"
+        )
+    return ACCOUNT_SETTING_CHANGES[setting]
+
+
+def account_setting_path(setting: str) -> str:
+    """``/account/settings/{setting}`` for a checked setting."""
+    return f"{ACCOUNT_SETTINGS_PATH}/{setting}"
+
+
+def check_account_label(account_id: Any) -> str:
+    """Check an account label the caller passed, such as ``account-7``.
+
+    Raises:
+        ValidationError: If it is not ``account-`` and a positive number.
+    """
+    if not isinstance(account_id, str) or not _ACCOUNT_LABEL.fullmatch(account_id):
+        raise ValidationError(
+            "account_id must be the account's label, such as account-7, as GET /account "
+            f"returns it, got {account_id!r}"
+        )
+    return account_id
+
+
+def account_label(account: Mapping[str, Any]) -> str:
+    """The account's label from the answer of ``GET /account``.
+
+    Raises:
+        VerdifaxError: If the answer has no usable ``account_id``, so no
+            change can be signed for it.
+    """
+    label = account.get("account_id")
+    if not isinstance(label, str) or not _ACCOUNT_LABEL.fullmatch(label):
+        raise VerdifaxError(
+            f"GET {ACCOUNT_PATH} returned no usable account_id, so the change cannot be signed"
+        )
+    return label
+
+
+def account_setting_body(
+    key: "Ed25519PrivateKey", account: str, change: str, value: str
+) -> dict[str, Any]:
+    """The body of ``PUT /account/settings/{setting}``: the value and the owner's signature."""
+    return {"value": value, "owner_signature": owner_change_signature(key, account, change, value)}
+
+
+def check_run_deletion(run_id: Any, record_hash: Any) -> None:
+    """Check the run and the record hash an owner's deletion signs.
+
+    Raises:
+        ValidationError: If ``run_id`` is not a positive integer, or
+            ``record_hash`` is not 64 lowercase hex characters.
+    """
+    validate_positive_id(run_id, "run_id")
+    validate_hex64(record_hash, "record_hash")
+
+
+def run_deletion_path(run_id: int) -> str:
+    """``/account/runs/{run_id}/delete`` for a checked run id."""
+    return f"{ACCOUNT_PATH}/runs/{run_id}/delete"
+
+
+def run_deletion_body(
+    key: "Ed25519PrivateKey", account: str, run_id: int, record_hash: str
+) -> dict[str, Any]:
+    """The body of ``POST /account/runs/{run_id}/delete``.
+
+    The owner signs ``run.deleted`` over ``RUN_ID:RECORD_HASH``, the run in
+    decimal and the record's hash, so the tombstone names the exact record.
+    """
+    subject = f"{run_id}:{record_hash}"
+    return {
+        "record_hash": record_hash,
+        "owner_signature": owner_change_signature(key, account, RUN_DELETED_CHANGE, subject),
+    }
+
+
+def _check_owner_record(
+    record: Mapping[str, Any],
+    sent: Mapping[str, Any],
+    key: "Ed25519PrivateKey",
+    what: str,
+    expected: Mapping[str, Any],
+) -> None:
+    """Check that a sealed owner's change carries what was sent, signed by ``key``.
+
+    Raises:
+        VerdifaxError: If a field in ``expected``, ``decided_by``, or the
+            owner's signature, its time, nonce or public key, differs.
+    """
+    for name, value in {**expected, "decided_by": "owner"}.items():
+        if record.get(name) != value:
+            raise VerdifaxError(f"the server's {what} has another {name} than was sent")
+    sealed = record.get("owner_signature")
+    signed = sent["owner_signature"]
+    if not isinstance(sealed, Mapping):
+        raise VerdifaxError(f"the server's {what} carries no owner_signature")
+    for name in ("signature", "signed_at", "nonce"):
+        if sealed.get(name) != signed[name]:
+            raise VerdifaxError(
+                f"the server's {what} has another owner_signature {name} than was sent"
+            )
+    public_key = base64.b64encode(key.public_key().public_bytes_raw()).decode("ascii")
+    if sealed.get("public_key") != public_key:
+        raise VerdifaxError(
+            f"the server's {what} names another owner_signature public_key than this "
+            "client's signing_key"
+        )
+
+
+def account_setting_answer(
+    response_body: Any, sent: Mapping[str, Any], change: str, key: "Ed25519PrivateKey"
+) -> dict[str, Any]:
+    """The answer of ``PUT /account/settings/{setting}``, checked against what was sent.
+
+    ``account_change`` is ``None`` when the value was already set. Otherwise
+    the sealed record must carry the change, the value, ``decided_by``
+    ``owner`` and the owner's signature that was sent.
+
+    Raises:
+        VerdifaxError: If the answer has no ``account_change``, or the record
+            does not carry what was sent.
+    """
+    if not isinstance(response_body, dict) or "account_change" not in response_body:
+        raise VerdifaxError("the server's answer has no account_change")
+    record = response_body["account_change"]
+    if record is None:
+        return response_body
+    if not isinstance(record, Mapping):
+        raise VerdifaxError("the server's account_change is not a record")
+    expected = {"action": change, "value": sent["value"]}
+    _check_owner_record(record, sent, key, "account change record", expected)
+    return response_body
+
+
+def run_deletion_answer(
+    response_body: Any, sent: Mapping[str, Any], run_id: int, key: "Ed25519PrivateKey"
+) -> dict[str, Any]:
+    """The answer of ``POST /account/runs/{run_id}/delete``, checked against what was sent.
+
+    The tombstone must carry the run, the record hash, ``decided_by``
+    ``owner`` and the owner's signature that was sent.
+
+    Raises:
+        VerdifaxError: If the answer has no ``run_deletion`` record, or the
+            record does not carry what was sent.
+    """
+    record = response_body.get("run_deletion") if isinstance(response_body, dict) else None
+    if not isinstance(record, Mapping):
+        raise VerdifaxError("the server's answer has no run_deletion record")
+    expected = {"run_id": run_id, "record_hash": sent["record_hash"]}
+    _check_owner_record(record, sent, key, "run deletion record", expected)
+    result: dict[str, Any] = response_body
+    return result
+
+
+def admin_run_deletion_path(run_id: int) -> str:
+    """Validate ``run_id`` and build ``/admin/runs/{run_id}/delete``."""
+    validate_positive_id(run_id, "run_id")
+    return f"/admin/runs/{run_id}/delete"
+
+
+def admin_owner_key_replacement_path(account_id: int) -> str:
+    """Validate ``account_id`` and build ``/admin/accounts/{account_id}/owner-key/replace``.
+
+    ``account_id`` is the account's number (``7`` for ``account-7``), as
+    ``GET /admin/accounts`` lists it.
+    """
+    validate_positive_id(account_id, "account_id")
+    return f"/admin/accounts/{account_id}/owner-key/replace"
+
+
 def admin_accounts(body: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The list of ``GET /admin/accounts``.
 
@@ -604,6 +826,10 @@ def governed_text(response: Union[str, bytes]) -> str:
 
 __all__ = [
     "ACCOUNT_PATH",
+    "ACCOUNT_SETTING_CHANGES",
+    "ACCOUNT_SETTING_VALUES",
+    "ACCOUNT_SETTINGS_PATH",
+    "RUN_DELETED_CHANGE",
     "ACCOUNT_TIME_ZONE_PATH",
     "ACCOUNT_POLICIES_PATH",
     "BatchRow",
@@ -611,17 +837,26 @@ __all__ = [
     "POLICIES_PATH",
     "account_key_body",
     "account_key_path",
+    "account_label",
+    "account_setting_answer",
+    "account_setting_body",
+    "account_setting_change",
+    "account_setting_path",
     "activation_record",
     "admin_account_body",
     "admin_accounts",
     "admin_erase_body",
     "admin_key_body",
+    "admin_owner_key_replacement_path",
+    "admin_run_deletion_path",
     "apply_policy_fields",
     "attest_receipt",
     "attested_block",
     "batch_body",
     "batch_response",
     "batch_row",
+    "check_account_label",
+    "check_run_deletion",
     "format_provider_payload",
     "governed_text",
     "parse_export_csv",
@@ -634,7 +869,11 @@ __all__ = [
     "query_params",
     "refuse_origin_hashes",
     "refuse_unsigned_account_change",
+    "refuse_unsigned_owner_change",
     "reproducibility_block",
+    "run_deletion_answer",
+    "run_deletion_body",
+    "run_deletion_path",
     "run_path",
     "with_attested_flag",
     "account_time_zone_body",

@@ -20,10 +20,11 @@ _JOB_NAME_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 _JOB_FIELDS = frozenset(
     {"job_id", "step_id", "previous_record_hashes", "external_previous", "final"}
 )
-# Every top-level key of a run request. The server ignores a key it does not
-# know, so a misspelt one would be dropped with no error: the client refuses
-# it instead. A test holds this list equal to execute_fields in the shared
-# sdk-parity.json.
+# Every top-level key of a run request. The server refuses a key it does not
+# define (400) unless the request asks lenient=1, which drops it with no
+# error: the client refuses it first, before anything is sent. Tests hold this
+# list equal to execute_fields in the shared sdk-parity.json and to the
+# server's executeRequest struct.
 EXECUTE_FIELDS = (
     "payload",
     "payload_text",

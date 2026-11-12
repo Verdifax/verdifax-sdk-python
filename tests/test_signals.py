@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import inspect
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -426,7 +427,27 @@ def test_the_helpers_are_exported():
         "chain.gap",
         "run.sealed",
         "chain.interrupted",
+        "account.changed",
+        "run.deleted",
     )
+
+
+def test_the_signal_kinds_are_the_servers_in_its_order():
+    server = (
+        Path(__file__).parent.parent.parent / "verdifax-orchestrator/internal/artifacts/signal.go"
+    )
+    if not server.exists():
+        pytest.skip("the orchestrator source is not beside this repository")
+    text = server.read_text(encoding="utf-8")
+    names = dict(re.findall(r'^\s*(Signal\w+)\s*=\s*"([a-z]+\.[a-z]+)"', text, re.M))
+    for path in server.parent.glob("*.go"):
+        names.update(
+            re.findall(r'^\s*(Signal\w+)\s*=\s*"([a-z]+\.[a-z]+)"', path.read_text("utf-8"), re.M)
+        )
+    listed = re.search(r"var SignalKinds = \[\]string\{(.*?)\}", text, re.S)
+    assert listed is not None
+    order = [names[name.strip()] for name in listed.group(1).split(",") if name.strip()]
+    assert SIGNAL_KINDS == tuple(order)
 
 
 def test_the_parity_map_names_every_signal_method_for_both_clients():
@@ -1123,9 +1144,25 @@ def test_the_readme_states_the_signal_feed_facts():
         assert f"`verdifax.{name}(" in section, name
 
 
-def test_the_changelog_opens_with_1_13_0_and_the_earlier_releases_follow():
+def test_the_changelog_opens_with_1_14_0_and_the_earlier_releases_follow():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     newest = changelog.split("\n## ", 2)[1]
+    assert newest.startswith("1.14.0\n")
+    for phrase in (
+        "set_account_setting",
+        "delete_run",
+        "admin_delete_run",
+        "admin_replace_owner_key",
+        "owner_change_preimage",
+        "account.changed",
+        "run.deleted",
+        "owner_replacement",
+        "verdifax_deletion",
+        "verdifax.key-change.v2",
+        "lenient=1",
+    ):
+        assert phrase in newest, phrase
+    newest = changelog.split("\n## ", 3)[2]
     assert newest.startswith("1.13.0\n")
     for phrase in (
         "pending_signoffs",
@@ -1135,15 +1172,15 @@ def test_the_changelog_opens_with_1_13_0_and_the_earlier_releases_follow():
         "v0.31.0",
     ):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 3)[2]
+    newest = changelog.split("\n## ", 4)[3]
     assert newest.startswith("1.12.0\n")
     for phrase in ("data_quality", "pending_signoffs", "lenient", "fallback", "get_public_signoff"):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 4)[3]
+    newest = changelog.split("\n## ", 5)[4]
     assert newest.startswith("1.11.0\n")
     for phrase in ("chain.interrupted", "v0.29.0", "2^53"):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 5)[4]
+    newest = changelog.split("\n## ", 6)[5]
     assert newest.startswith("1.10.0\n")
     for phrase in (
         "run.sealed",
@@ -1154,21 +1191,21 @@ def test_the_changelog_opens_with_1_13_0_and_the_earlier_releases_follow():
         "v0.28.0",
     ):
         assert phrase in newest, phrase
-    entry = changelog.split("\n## ", 6)[5]
+    entry = changelog.split("\n## ", 7)[6]
     assert entry.startswith("1.9.0\n")
     assert "aivp_trace_text" in entry
-    entry = changelog.split("\n## ", 7)[6]
+    entry = changelog.split("\n## ", 8)[7]
     assert entry.startswith("1.8.0\n")
     assert "decided_by" in entry
-    entry = changelog.split("\n## ", 8)[7]
+    entry = changelog.split("\n## ", 9)[8]
     assert entry.startswith("1.7.0\n")
     assert "public_receipt_url" in entry
-    assert changelog.split("\n## ", 9)[8].startswith("1.6.1\n")
-    entry = changelog.split("\n## ", 10)[9]
+    assert changelog.split("\n## ", 10)[9].startswith("1.6.1\n")
+    entry = changelog.split("\n## ", 11)[10]
     assert entry.startswith("1.6.0\n")
     for phrase in ("publish_run", "unpublish_run", "run.published", "run.unpublished", "v0.24.0"):
         assert phrase in entry, phrase
-    entry = changelog.split("\n## ", 11)[10]
+    entry = changelog.split("\n## ", 12)[11]
     assert entry.startswith("1.5.0\n")
     for phrase in (
         "feed keys",
@@ -1243,3 +1280,45 @@ def test_pending_signoffs_reads_a_job_signoff_as_the_verifier_does():
     # 20: approved by its job. 21: the job's rejection governs its own
     # approval. 22: the job's approval governs its own rejection.
     assert pending_signoffs(events) == [21]
+
+
+def test_pending_signoffs_leaves_out_a_deleted_run():
+    """Round 60: a run.deleted event for a run, at any place in the feed
+    given, removes the run from the pending list; another run stays."""
+    from verdifax import VerdifaxError, pending_signoffs
+
+    def ev(seq, kind, entry):
+        return {"id": f"account-7/{seq}", "data": {"kind": kind, "sequence": seq, "entry": entry}}
+
+    def deletion(run, decided_by="owner"):
+        return {"format": "verdifax.run-deletion.v1", "decided_by": decided_by, "run_id": run}
+
+    events = [
+        ev(1, "run.sealed", {"run_id": 30, "signoff_required": True}),
+        ev(2, "run.sealed", {"run_id": 31, "signoff_required": True}),
+        ev(3, "run.deleted", deletion(30)),
+    ]
+    assert pending_signoffs(events) == [31]
+    # A deletion before the run's sealed event, or by Verdifax, counts the same.
+    events = [
+        ev(1, "run.deleted", deletion(40, "verdifax_admin")),
+        ev(2, "run.sealed", {"run_id": 40, "signoff_required": True}),
+        ev(3, "run.sealed", {"run_id": 41, "signoff_required": True}),
+        ev(
+            4,
+            "signoff.recorded",
+            {"decision": "reject", "target": {"kind": "record", "run_id": 41}},
+        ),
+    ]
+    assert pending_signoffs(events) == [41]
+    # A deletion of another run removes nothing.
+    events = [
+        ev(1, "run.sealed", {"run_id": 50, "signoff_required": True}),
+        ev(2, "run.deleted", deletion(51)),
+    ]
+    assert pending_signoffs(events) == [50]
+    for entry in ({}, {"run_id": "50"}, {"run_id": True}):
+        with pytest.raises(
+            VerdifaxError, match="run.deleted entry of event account-7/2 names no run"
+        ):
+            pending_signoffs([events[0], ev(2, "run.deleted", entry)])

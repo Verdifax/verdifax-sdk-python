@@ -30,16 +30,25 @@ from ._requests import (
     BatchRow,
     account_key_body,
     account_key_path,
+    account_label,
+    account_setting_answer,
+    account_setting_body,
+    account_setting_change,
+    account_setting_path,
     account_time_zone_body,
     activation_record,
     admin_account_body,
     admin_accounts,
     admin_erase_body,
     admin_key_body,
+    admin_owner_key_replacement_path,
+    admin_run_deletion_path,
     apply_policy_fields,
     attest_receipt,
     batch_body,
     batch_response,
+    check_account_label,
+    check_run_deletion,
     parse_export_csv,
     policy_activation_body,
     policy_history,
@@ -52,7 +61,11 @@ from ._requests import (
     report_request,
     refuse_origin_hashes,
     refuse_unsigned_account_change,
+    refuse_unsigned_owner_change,
     reproducibility_block,
+    run_deletion_answer,
+    run_deletion_body,
+    run_deletion_path,
     run_path,
 )
 from ._retry import DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY, RetryingClient
@@ -1014,10 +1027,64 @@ class VerdifaxClient:
         Returns:
             The server's object: ``ok``, ``account_id`` (such as
             ``account-7``), ``id``, ``name``, ``tier``, ``created_at``,
-            ``member_keys``, ``owner_keys`` and ``chain_id``, the chain of
-            the account's policy changes.
+            ``member_keys``, ``owner_keys``, ``chain_id``, the chain of
+            the account's policy changes, ``time_zone``, and the owner's two
+            settings, ``owner_replacement`` and ``verdifax_deletion``, each
+            ``allowed`` or ``blocked`` (see :meth:`set_account_setting`).
         """
         return self._get_json(ACCOUNT_PATH)
+
+    def _owner_account(self, account_id: Optional[str]) -> str:
+        """The account label an owner's change signs: the one given, or ``GET /account``'s."""
+        if account_id is not None:
+            return check_account_label(account_id)
+        return account_label(self._get_json(ACCOUNT_PATH))
+
+    def set_account_setting(
+        self, setting: str, value: str, account_id: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Set one of the owner's blocks on Verdifax with ``PUT /account/settings/{setting}``.
+
+        Needs the account's owner key, and a client whose ``signing_key`` is
+        the owner key's request key: the owner signs the change on this
+        machine, and the record seals the signature, so Verdifax, which never
+        holds that key, cannot make the change itself. While
+        ``owner-replacement`` is ``blocked``, Verdifax cannot replace or
+        revoke the account's owner key, or start a replacement. While
+        ``verdifax-deletion`` is ``blocked``, Verdifax cannot delete one of
+        the account's records. Each change is sealed in the account's signal
+        feed as an ``account.changed`` event, decided by the owner.
+
+        Args:
+            setting: ``owner-replacement`` or ``verdifax-deletion``.
+            value: ``allowed`` or ``blocked``.
+            account_id: The account's label, such as ``account-7``. Without
+                it the client reads it from ``GET /account`` first.
+
+        Returns:
+            The server's object: ``ok``, ``setting``, ``value`` and
+            ``account_change``, the sealed record, or ``None`` when the value
+            was already set and nothing changed. The record is checked: it
+            must carry the change, the value, ``decided_by`` ``owner`` and the
+            owner's signature sent, with this client's public key.
+
+        Raises:
+            ValidationError: If ``setting``, ``value`` or ``account_id`` is
+                not one the server takes, or this client has no
+                ``signing_key``, before anything is sent.
+            VerdifaxError: If ``GET /account`` gave no usable ``account_id``,
+                or the answer has no ``account_change`` or its record does
+                not carry what was sent.
+            APIError: For a non-2xx response, for example 400 for a
+                signature the server does not accept. It is not retried.
+            ConnectionError: If the API was unreachable.
+        """
+        change = account_setting_change(setting, value)
+        key = refuse_unsigned_owner_change(self._signing_key, "set_account_setting")
+        account = self._owner_account(account_id)
+        body = account_setting_body(key, account, change, value)
+        answer = self._send_json("PUT", account_setting_path(setting), body)
+        return account_setting_answer(answer, body, change, key)
 
     def set_account_time_zone(self, time_zone: str) -> dict[str, Any]:
         """Choose the second time zone the account's audit reports show beside
@@ -1428,6 +1495,53 @@ class VerdifaxClient:
         """
         return self._send_json("POST", publication_path(run_id, "unpublish"))
 
+    def delete_run(
+        self, run_id: int, record_hash: str, account_id: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Delete one of the account's records with ``POST /account/runs/{id}/delete``.
+
+        Needs the account's owner key, and a client whose ``signing_key`` is
+        the owner key's request key. The owner signs ``run.deleted`` over the
+        run and the hash of the record it read, so the tombstone names the
+        exact record; the server refuses a hash that is not the run's (409).
+        The record is deleted and its tombstone sealed in the account's
+        signal feed as a ``run.deleted`` event, in one write. A public record
+        must be withdrawn first with :meth:`unpublish_run`; the server
+        answers 409 for it. The owner's own deletions are never blocked.
+
+        Args:
+            run_id: The run to delete.
+            record_hash: The record's hash: a completed run's ``record_hash``
+                from ``POST /execute`` (its manifest hash), or a stopped run's
+                receipt hash.
+            account_id: The account's label, such as ``account-7``. Without
+                it the client reads it from ``GET /account`` first.
+
+        Returns:
+            The server's object: ``ok``, ``run_id``, ``deleted`` and
+            ``run_deletion``, the sealed tombstone. The tombstone is checked:
+            it must carry the run, the record hash, ``decided_by`` ``owner``
+            and the owner's signature sent, with this client's public key.
+
+        Raises:
+            ValidationError: If ``run_id`` is not a positive integer,
+                ``record_hash`` is not 64 lowercase hex characters,
+                ``account_id`` is not a label, or this client has no
+                ``signing_key``, before anything is sent.
+            VerdifaxError: If ``GET /account`` gave no usable ``account_id``,
+                or the answer has no ``run_deletion`` record or it does not
+                carry what was sent.
+            APIError: For a non-2xx response, for example 404 for a run of
+                another account. It is not retried.
+            ConnectionError: If the API was unreachable.
+        """
+        check_run_deletion(run_id, record_hash)
+        key = refuse_unsigned_owner_change(self._signing_key, "delete_run")
+        account = self._owner_account(account_id)
+        body = run_deletion_body(key, account, run_id, record_hash)
+        answer = self._send_json("POST", run_deletion_path(run_id), body)
+        return run_deletion_answer(answer, body, run_id, key)
+
     def get_signoffs(self, run_id: int, as_owner: bool = False) -> list[dict[str, Any]]:
         """The sign-offs on one run, oldest first, from ``GET /runs/{id}/signoffs``.
 
@@ -1717,6 +1831,50 @@ class VerdifaxClient:
         """Clear the request key of an API key whose holder lost it."""
         validate_positive_id(key_id, "key_id")
         return self._send_json("DELETE", f"/admin/keys/{key_id}/request-key")
+
+    def admin_delete_run(self, run_id: int) -> dict[str, Any]:
+        """Delete one record as Verdifax with ``POST /admin/runs/{id}/delete``.
+
+        Needs a Verdifax admin key. The deletion is sealed in the feed of the
+        record's account as a ``run.deleted`` event decided by Verdifax. The
+        server refuses it (409) while the account's owner blocks Verdifax
+        deletion, for a public record until it is withdrawn, and for a run
+        that belongs to no account.
+
+        Returns:
+            The server's object: ``ok``, ``run_id``, ``deleted`` and
+            ``run_deletion``, the sealed tombstone.
+
+        Raises:
+            ValidationError: If ``run_id`` is not a positive integer.
+            APIError: For a non-2xx response. It is not retried.
+        """
+        return self._send_json("POST", admin_run_deletion_path(run_id))
+
+    def admin_replace_owner_key(self, account_id: int) -> dict[str, Any]:
+        """Start replacing a lost owner key with ``POST /admin/accounts/{id}/owner-key/replace``.
+
+        Needs a Verdifax admin key, on the owner's written request. The
+        server seals the request in the account's feed as an
+        ``account.changed`` event decided by Verdifax, and emails a one-time
+        link, which works for 72 hours, to the address of the access request
+        that made the account. Verdifax never sees the new key: it is made
+        when the owner opens the link. The server refuses it (409) while the
+        owner blocks replacement, and for an account with no address on file.
+
+        Args:
+            account_id: The account's number, ``7`` for ``account-7``, as
+                :meth:`admin_list_accounts` lists it.
+
+        Returns:
+            The server's object: ``ok``, ``account_id``, ``claim_expires``,
+            ``account_change`` and ``email``. It never holds the link or a key.
+
+        Raises:
+            ValidationError: If ``account_id`` is not a positive integer.
+            APIError: For a non-2xx response. It is not retried.
+        """
+        return self._send_json("POST", admin_owner_key_replacement_path(account_id))
 
     def admin_erase(
         self,

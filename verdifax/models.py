@@ -142,6 +142,12 @@ class ExecutionManifest(_AliasedModel):
     field seals the entire manifest with SHA-256.
     """
 
+    # Round 60: the manifest keeps every field the server sends. About 23 are
+    # typed here; every other sealed field (PEPG, AIVP, CCV, MACC, ledger,
+    # account, job) stays on the model in ``model_extra`` instead of being
+    # dropped, so a caller holding a manifest holds all of it.
+    model_config = ConfigDict(populate_by_name=True, extra="allow", frozen=True)
+
     # Stage 1, DOG: Deterministic Oracle Gateway
     envelope_id: str = Field(..., alias="EnvelopeID")
     envelope_hash: str = Field(..., alias="EnvelopeHash")

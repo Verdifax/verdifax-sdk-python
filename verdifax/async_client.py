@@ -34,15 +34,24 @@ from ._requests import (
     BatchRow,
     account_key_body,
     account_key_path,
+    account_label,
+    account_setting_answer,
+    account_setting_body,
+    account_setting_change,
+    account_setting_path,
     account_time_zone_body,
     activation_record,
     admin_account_body,
     admin_accounts,
     admin_erase_body,
     admin_key_body,
+    admin_owner_key_replacement_path,
+    admin_run_deletion_path,
     attest_receipt,
     batch_body,
     batch_response,
+    check_account_label,
+    check_run_deletion,
     parse_export_csv,
     policy_activation_body,
     policy_history,
@@ -54,6 +63,10 @@ from ._requests import (
     query_params,
     report_request,
     refuse_unsigned_account_change,
+    refuse_unsigned_owner_change,
+    run_deletion_answer,
+    run_deletion_body,
+    run_deletion_path,
     run_path,
 )
 from ._retry import AsyncRetryingClient, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_BASE_DELAY
@@ -687,6 +700,26 @@ class AsyncVerdifaxClient:
         """Async version of :meth:`VerdifaxClient.get_account`."""
         return await self._get_json(ACCOUNT_PATH)
 
+    async def _owner_account(self, account_id: Optional[str]) -> str:
+        """The account label an owner's change signs: the one given, or ``GET /account``'s."""
+        if account_id is not None:
+            return check_account_label(account_id)
+        return account_label(await self._get_json(ACCOUNT_PATH))
+
+    async def set_account_setting(
+        self, setting: str, value: str, account_id: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.set_account_setting`.
+
+        The owner key's request key signs the change on this machine.
+        """
+        change = account_setting_change(setting, value)
+        key = refuse_unsigned_owner_change(self._signing_key, "set_account_setting")
+        account = await self._owner_account(account_id)
+        body = account_setting_body(key, account, change, value)
+        answer = await self._send_json("PUT", account_setting_path(setting), body)
+        return account_setting_answer(answer, body, change, key)
+
     async def set_account_time_zone(self, time_zone: str) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.set_account_time_zone`."""
         return await self._send_json(
@@ -841,6 +874,20 @@ class AsyncVerdifaxClient:
         """Withdraw a record from its public link; see :meth:`verdifax.VerdifaxClient.unpublish_run`."""
         return await self._send_json("POST", publication_path(run_id, "unpublish"))
 
+    async def delete_run(
+        self, run_id: int, record_hash: str, account_id: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.delete_run`.
+
+        The owner key's request key signs the deletion on this machine.
+        """
+        check_run_deletion(run_id, record_hash)
+        key = refuse_unsigned_owner_change(self._signing_key, "delete_run")
+        account = await self._owner_account(account_id)
+        body = run_deletion_body(key, account, run_id, record_hash)
+        answer = await self._send_json("POST", run_deletion_path(run_id), body)
+        return run_deletion_answer(answer, body, run_id, key)
+
     async def get_signoffs(self, run_id: int, as_owner: bool = False) -> list[dict[str, Any]]:
         """Async version of :meth:`VerdifaxClient.get_signoffs`."""
         path = run_signoffs_path(run_id, as_owner)
@@ -960,6 +1007,14 @@ class AsyncVerdifaxClient:
         """Async version of :meth:`VerdifaxClient.admin_clear_request_key`."""
         validate_positive_id(key_id, "key_id")
         return await self._send_json("DELETE", f"/admin/keys/{key_id}/request-key")
+
+    async def admin_delete_run(self, run_id: int) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.admin_delete_run`."""
+        return await self._send_json("POST", admin_run_deletion_path(run_id))
+
+    async def admin_replace_owner_key(self, account_id: int) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.admin_replace_owner_key`. It never returns a link or a key."""
+        return await self._send_json("POST", admin_owner_key_replacement_path(account_id))
 
     async def admin_erase(
         self,

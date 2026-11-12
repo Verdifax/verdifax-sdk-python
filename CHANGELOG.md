@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.14.0
+
+Owner settings, record deletion, owner-key replacement, and run bodies read strictly.
+
+- `ExecutionManifest` keeps every field the server sends: the fields it types as attributes, and every other sealed field (policy gate, AI review, budget, ledger, account and job fields among them) in `model_extra`, where earlier releases dropped them when a response was read.
+- `set_account_setting(setting, value, account_id=None)` (owner key) sets one of the owner's two blocks on Verdifax with `PUT /account/settings/{setting}`. `setting` is `owner-replacement` or `verdifax-deletion`, and `value` is `allowed` or `blocked`; anything else raises `ValidationError` before anything is sent. While `owner-replacement` is blocked, Verdifax cannot replace or revoke the owner key. While `verdifax-deletion` is blocked, Verdifax cannot delete one of the account's records. The answer's `account_change` is `None` when the value was already set.
+- `delete_run(run_id, record_hash, account_id=None)` (owner key) deletes one of the account's records with `POST /account/runs/{id}/delete`. `record_hash` is the record's hash: a completed run's `record_hash`, or a stopped run's receipt hash. The record's tombstone stays in the account's feed.
+- Both are signed on this machine by the owner key's request key, the client's `signing_key`, over `verdifax.owner-change-signature.v1`, the account's label (read from `GET /account` unless `account_id` is given), the change (`setting.owner_replacement`, `setting.verdifax_deletion` or `run.deleted`), its subject (the value, or `RUN_ID:RECORD_HASH`), the time and a fresh nonce. The record seals the signature. Verdifax never holds the owner's request key, so it cannot make a signature with it, and `verdifax-verify --signals --owner-request-key` confirms every owner change in the feed was signed with the owner's key. A client with no `signing_key` raises `ValidationError` before anything is sent. The client checks the sealed record in the answer carries what was sent, `decided_by` `owner` and the owner's signature with this client's public key, and raises `VerdifaxError` otherwise, as `sign_off` does. `verdifax.owner_change_preimage(account, change, subject, signed_at, nonce)` returns the signed bytes and makes no request. A test holds its signature to the vector every SDK checks, computed with the server's Go code.
+- `admin_delete_run(run_id)` and `admin_replace_owner_key(account_id)` (admin key) delete a record as Verdifax, and start the replacement of a lost owner key, on the owner's written request, by emailing a one-time link. `account_id` is the account's number. The answer never holds the link or a key. The server refuses both while the owner blocks them.
+- `get_account()` returns `owner_replacement` and `verdifax_deletion`, each `allowed` or `blocked`.
+- The signal feed carries two new kinds, `account.changed` and `run.deleted`, and `verdifax.SIGNAL_KINDS` lists them. Each records who decided. A key change may now be `verdifax.key-change.v2`, which carries `decided_by`. Webhook verification is unchanged.
+- The server now refuses a field it does not define in a body of `POST /execute`, `/execute/batch` or `/execute/verify-determinism` with `APIError` (400) naming it, unless the request asks `lenient=1`. Every body the SDK builds, the signed text of a version 2 request included, holds only fields the server defines.
+- `pending_signoffs(events)` leaves out a run whose deletion is in the events given: a `run.deleted` event for its `run_id`, at any place, removes it from the list. A `run.deleted` entry that names no run raises `VerdifaxError`, as a `run.sealed` one does.
+- The user agent is `verdifax-python/1.14.0`.
+
 ## 1.13.0
 
 Sign-off read as the verifier reads it, and the sign-off history's head statement.

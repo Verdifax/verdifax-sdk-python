@@ -36,6 +36,7 @@ from ._signoffs import approver_key_proof, signoff_preimage
 from ._signing import (
     RequestKeyPair,
     generate_request_key,
+    owner_change_preimage,
     policy_activation_approval,
     policy_activation_preimage,
     request_key_change_preimage,
@@ -278,6 +279,7 @@ __all__ = [
     "format_provider_payload",
     "from_env",
     "generate_request_key",
+    "owner_change_preimage",
     "policy_activation_approval",
     "policy_activation_preimage",
     "request_key_change_preimage",

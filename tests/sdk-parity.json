@@ -85,6 +85,23 @@
         "verdifax_admin_create_account"
       ]
     },
+    "POST /admin/accounts/{id}/owner-key/replace": {
+      "go": [
+        "AdminReplaceOwnerKey"
+      ],
+      "node": [
+        "adminReplaceOwnerKey"
+      ],
+      "python": [
+        "admin_replace_owner_key"
+      ],
+      "python_async": [
+        "admin_replace_owner_key"
+      ],
+      "r": [
+        "verdifax_admin_replace_owner_key"
+      ]
+    },
     "POST /admin/erase": {
       "go": [
         "AdminErase"
@@ -117,6 +134,23 @@
       ],
       "r": [
         "verdifax_admin_create_key"
+      ]
+    },
+    "POST /admin/runs/{id}/delete": {
+      "go": [
+        "AdminDeleteRun"
+      ],
+      "node": [
+        "adminDeleteRun"
+      ],
+      "python": [
+        "admin_delete_run"
+      ],
+      "python_async": [
+        "admin_delete_run"
+      ],
+      "r": [
+        "verdifax_admin_delete_run"
       ]
     }
   },
@@ -217,6 +251,12 @@
       "node": "MAX_BATCH_ROWS",
       "python": "MAX_BATCH_ROWS",
       "r": "verdifax_max_batch_rows"
+    },
+    "owner_change_preimage": {
+      "go": "OwnerChangePreimage",
+      "node": "ownerChangePreimage",
+      "python": "owner_change_preimage",
+      "r": "verdifax_owner_change_preimage"
     },
     "pending_signoffs": {
       "go": "PendingSignOffs",
@@ -836,6 +876,23 @@
         "verdifax_download_public_audit_pdf"
       ]
     },
+    "GET /public/runs/{token}/signoff.json": {
+      "go": [
+        "GetPublicSignOffByToken"
+      ],
+      "node": [
+        "getPublicSignOffByToken"
+      ],
+      "python": [
+        "get_public_signoff_by_token"
+      ],
+      "python_async": [
+        "get_public_signoff_by_token"
+      ],
+      "r": [
+        "verdifax_get_public_signoff_by_token"
+      ]
+    },
     "GET /runs": {
       "go": [
         "ListRuns"
@@ -1131,6 +1188,23 @@
         "verdifax_download_audit_pdf"
       ]
     },
+    "GET /runs/{id}/signoff.json": {
+      "go": [
+        "GetPublicSignOff"
+      ],
+      "node": [
+        "getPublicSignOff"
+      ],
+      "python": [
+        "get_public_signoff"
+      ],
+      "python_async": [
+        "get_public_signoff"
+      ],
+      "r": [
+        "verdifax_get_public_signoff"
+      ]
+    },
     "GET /runs/{id}/signoffs": {
       "go": [
         "GetSignOffs"
@@ -1350,6 +1424,57 @@
       ],
       "r": [
         "verdifax_register_account_request_key"
+      ]
+    },
+    "POST /account/runs/{id}/delete": {
+      "go": [
+        "DeleteRun"
+      ],
+      "node": [
+        "deleteRun"
+      ],
+      "python": [
+        "delete_run"
+      ],
+      "python_async": [
+        "delete_run"
+      ],
+      "r": [
+        "verdifax_delete_run"
+      ]
+    },
+    "POST /account/runs/{id}/publish": {
+      "go": [
+        "PublishRun"
+      ],
+      "node": [
+        "publishRun"
+      ],
+      "python": [
+        "publish_run"
+      ],
+      "python_async": [
+        "publish_run"
+      ],
+      "r": [
+        "verdifax_publish_run"
+      ]
+    },
+    "POST /account/runs/{id}/unpublish": {
+      "go": [
+        "UnpublishRun"
+      ],
+      "node": [
+        "unpublishRun"
+      ],
+      "python": [
+        "unpublish_run"
+      ],
+      "python_async": [
+        "unpublish_run"
+      ],
+      "r": [
+        "verdifax_unpublish_run"
       ]
     },
     "POST /account/signoffs": {
@@ -1590,38 +1715,21 @@
         "verdifax_sign_off"
       ]
     },
-    "POST /account/runs/{id}/publish": {
+    "PUT /account/settings/{setting}": {
       "go": [
-        "PublishRun"
+        "SetAccountSetting"
       ],
       "node": [
-        "publishRun"
+        "setAccountSetting"
       ],
       "python": [
-        "publish_run"
+        "set_account_setting"
       ],
       "python_async": [
-        "publish_run"
+        "set_account_setting"
       ],
       "r": [
-        "verdifax_publish_run"
-      ]
-    },
-    "POST /account/runs/{id}/unpublish": {
-      "go": [
-        "UnpublishRun"
-      ],
-      "node": [
-        "unpublishRun"
-      ],
-      "python": [
-        "unpublish_run"
-      ],
-      "python_async": [
-        "unpublish_run"
-      ],
-      "r": [
-        "verdifax_unpublish_run"
+        "verdifax_set_account_setting"
       ]
     },
     "PUT /account/time-zone": {
@@ -1639,40 +1747,6 @@
       ],
       "r": [
         "verdifax_set_account_time_zone"
-      ]
-    },
-    "GET /public/runs/{token}/signoff.json": {
-      "go": [
-        "GetPublicSignOffByToken"
-      ],
-      "node": [
-        "getPublicSignOffByToken"
-      ],
-      "python": [
-        "get_public_signoff_by_token"
-      ],
-      "python_async": [
-        "get_public_signoff_by_token"
-      ],
-      "r": [
-        "verdifax_get_public_signoff_by_token"
-      ]
-    },
-    "GET /runs/{id}/signoff.json": {
-      "go": [
-        "GetPublicSignOff"
-      ],
-      "node": [
-        "getPublicSignOff"
-      ],
-      "python": [
-        "get_public_signoff"
-      ],
-      "python_async": [
-        "get_public_signoff"
-      ],
-      "r": [
-        "verdifax_get_public_signoff"
       ]
     }
   },

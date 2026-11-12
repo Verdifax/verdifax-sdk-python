@@ -66,6 +66,12 @@ SIGNAL_KINDS = (
     # in its chain is closed by a sealed, anchored record naming the entry
     # it would have made.
     "chain.interrupted",
+    # A change to the account's settings or to one of its keys' terms, by
+    # the owner or by Verdifax, with who decided.
+    "account.changed",
+    # One of the account's records was deleted, by the owner or by Verdifax;
+    # the tombstone stays in the feed.
+    "run.deleted",
 )
 SIGNALS_PATH = "/signals"
 ACCOUNT_SIGNALS_PATH = "/account/signals"
@@ -592,26 +598,32 @@ def pending_signoffs(events: Iterable[Mapping[str, Any]]) -> list[int]:
     when there is one, and otherwise the last record sign-off; a receipt
     sign-off does not name a record (round 59, N15 and N19). Pass the
     account's feed from its start, or a page that includes each run's
-    sign-offs, so a sign-off recorded later is seen (round 58, B7). Returned
-    in feed order.
+    sign-offs, so a sign-off recorded later is seen (round 58, B7). A run
+    whose deletion is in ``events`` (a ``run.deleted`` entry naming its
+    ``run_id``, at any place) is left out: its record is gone, so there is
+    nothing left to sign off. Returned in feed order.
 
-    Raises ``VerdifaxError`` for a ``run.sealed`` entry that names no run.
+    Raises ``VerdifaxError`` for a ``run.sealed`` or ``run.deleted`` entry
+    that names no run.
     """
     order: list[int] = []
     required: set[int] = set()
+    deleted: set[int] = set()
     latest_job: dict[int, Any] = {}
     latest_record: dict[int, Any] = {}
     for event in events:
         data = event.get("data") or {}
         entry = data.get("entry") or {}
         kind = data.get("kind")
-        if kind == "run.sealed":
+        if kind in ("run.sealed", "run.deleted"):
             run = entry.get("run_id")
             if not isinstance(run, int) or isinstance(run, bool):
                 raise VerdifaxError(
-                    f"verdifax: the run.sealed entry of event {event.get('id')} names no run"
+                    f"verdifax: the {kind} entry of event {event.get('id')} names no run"
                 )
-            if entry.get("signoff_required") is True and run not in required:
+            if kind == "run.deleted":
+                deleted.add(run)
+            elif entry.get("signoff_required") is True and run not in required:
                 required.add(run)
                 order.append(run)
         elif kind == "signoff.recorded":
@@ -626,4 +638,4 @@ def pending_signoffs(events: Iterable[Mapping[str, Any]]) -> list[int]:
     def in_force(run: int) -> Any:
         return latest_job[run] if run in latest_job else latest_record.get(run)
 
-    return [run for run in order if in_force(run) != "approve"]
+    return [run for run in order if run not in deleted and in_force(run) != "approve"]

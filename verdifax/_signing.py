@@ -36,6 +36,7 @@ _JOB_FORM = "verdifax.job.v1"
 _REQUEST_KEY_PROOF_FORM = "verdifax.request-key.v1"
 _REQUEST_KEY_CHANGE_FORM = "verdifax.request-key-change.v1"
 _POLICY_ACTIVATION_FORM = "verdifax.policy-activation.v1"
+_OWNER_CHANGE_FORM = "verdifax.owner-change-signature.v1"
 _SIGNING_KEY_BYTES = 32
 
 
@@ -210,6 +211,61 @@ def policy_activation_preimage(
             raise ValidationError(f"{name} cannot be signed: it holds a zero byte")
     values = (_POLICY_ACTIVATION_FORM, *(value for _, value in fields))
     return "\x00".join(values).encode("utf-8")
+
+
+def owner_change_preimage(
+    account: str, change: str, subject: str, signed_at: str, nonce: str
+) -> bytes:
+    """The bytes the owner key's request key signs for a change the owner decides.
+
+    ``account`` is the account's label, such as ``account-7``, from
+    ``GET /account``. ``change`` is ``setting.owner_replacement``,
+    ``setting.verdifax_deletion`` or ``run.deleted``. ``subject`` is the
+    setting's new value (``allowed`` or ``blocked``), or
+    ``RUN_ID:RECORD_HASH`` for a deletion. The record seals the signature,
+    so Verdifax, which never holds the key, cannot make the change. Matches
+    the orchestrator's ``OwnerChangePreimage``.
+
+    Raises:
+        ValidationError: If a value is not text or holds a zero byte, which
+            would make the joined bytes ambiguous.
+    """
+    fields = (
+        ("account", account),
+        ("change", change),
+        ("subject", subject),
+        ("signed_at", signed_at),
+        ("nonce", nonce),
+    )
+    for name, value in fields:
+        _utf8(value, name)
+        if "\x00" in value:
+            raise ValidationError(f"{name} cannot be signed: it holds a zero byte")
+    values = (_OWNER_CHANGE_FORM, *(value for _, value in fields))
+    return "\x00".join(values).encode("utf-8")
+
+
+def owner_change_signature(
+    key: "Ed25519PrivateKey",
+    account: str,
+    change: str,
+    subject: str,
+    signed_at: Optional[str] = None,
+    nonce: Optional[str] = None,
+) -> dict[str, str]:
+    """The ``owner_signature`` block of an owner's change, signed by ``key``.
+
+    ``signed_at`` and ``nonce`` default to the current time and 16 fresh
+    random bytes. A nonce the server has already seen is refused.
+    """
+    signed_at = _signing_time() if signed_at is None else signed_at
+    nonce = _signing_nonce() if nonce is None else nonce
+    preimage = owner_change_preimage(account, change, subject, signed_at, nonce)
+    return {
+        "signature": base64.b64encode(key.sign(preimage)).decode("ascii"),
+        "signed_at": signed_at,
+        "nonce": nonce,
+    }
 
 
 def _signing_time() -> str:
@@ -452,6 +508,8 @@ __all__ = [
     "attach_signature",
     "generate_request_key",
     "load_signing_key",
+    "owner_change_preimage",
+    "owner_change_signature",
     "payload_hash",
     "policy_activation_approval",
     "policy_activation_preimage",

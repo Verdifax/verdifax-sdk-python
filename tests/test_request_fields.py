@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import httpx
 import pytest
@@ -241,3 +242,157 @@ def test_a_job_step_refuses_a_misspelt_option_with_the_sdks_error():
     with pytest.raises(ValidationError, match="polcy_context"):
         sync_client(responder(seen)).job("j").step("s", **ARGS, polcy_context={})
     assert seen == []
+
+
+# ── every body the SDK builds holds only fields the server defines ───────────
+#
+# Since round 60 the server refuses a field it does not define in a run body
+# (400, naming it), unless the request asks lenient=1. These read the
+# server's own structs when its source is beside this repository, and build
+# each body with every block the SDK itself fills, signed and unsigned.
+
+ORCHESTRATOR = Path(__file__).parent.parent.parent / "verdifax-orchestrator"
+
+
+def server_fields(relative: str, struct: str) -> set[str]:
+    """The JSON names of one Go struct in the orchestrator's source."""
+    path = ORCHESTRATOR / relative
+    if not path.exists():
+        pytest.skip("the orchestrator source is not beside this repository")
+    text = path.read_text(encoding="utf-8")
+    body = re.search(rf"^type {struct} struct \{{\n(.*?)^\}}", text, re.M | re.S)
+    assert body is not None, struct
+    return {
+        tag.split(",")[0]
+        for tag in re.findall(r'^\s*\w+\s+[^`\n]+`json:"([^"]+)"', body.group(1), re.M)
+        if tag.split(",")[0] != "-"
+    }
+
+
+def server_shape() -> dict[str, set[str]]:
+    return {
+        "": server_fields("internal/api/server.go", "executeRequest"),
+        "request_signature": server_fields(
+            "internal/api/request_signature.go", "requestSignatureInput"
+        ),
+        "job": server_fields("internal/artifacts/job.go", "JobLink"),
+        "policy_context": server_fields("internal/api/policy_gate.go", "policyContextInput"),
+        "policy_context.data_quality": server_fields("internal/psleval/inputs.go", "DataQuality"),
+        "policy_context.data_quality.checks": server_fields(
+            "internal/psleval/inputs.go", "DataCheck"
+        ),
+        "attested_context": server_fields("internal/artifacts/types.go", "AttestedContext"),
+        "reproducibility_context": server_fields(
+            "internal/artifacts/category6_reproducibility.go", "ReproducibilityContext"
+        ),
+    }
+
+
+def assert_server_fields(
+    body: Mapping[str, Any], shape: dict[str, set[str]], where: str = ""
+) -> None:
+    unknown = set(body) - shape[where]
+    assert not unknown, (where or "body", sorted(unknown))
+    for name, value in body.items():
+        place = f"{where}.{name}" if where else name
+        if place not in shape:
+            continue
+        for item in value if isinstance(value, list) else [value]:
+            assert_server_fields(item, shape, place)
+
+
+def assert_run_body(sent: Mapping[str, Any], shape: dict[str, set[str]], signed: bool) -> None:
+    if signed:
+        assert set(sent) == {"signed_request", "request_signature"}
+        assert_server_fields(sent, shape)
+        inner = json.loads(sent["signed_request"])
+        assert "signed_request" not in inner and "request_signature" not in inner
+        assert_server_fields(inner, shape)
+    else:
+        assert_server_fields(sent, shape)
+
+
+FULL_RUN: dict[str, Any] = {
+    **ARGS,
+    "ai_output_text": "answer",
+    "attested_context": AttestedContext(actor_id="u-1", model_temperature=0.2),
+    "reproducibility_context": ReproducibilityContext(runtime_name="cpython", random_seeds=["a=1"]),
+    "policy_context": {
+        "actor_type": "user",
+        "mfa_satisfied": True,
+        "session_age_seconds": 5,
+        "object_type": "text",
+        "object_id": "o",
+        "classification": "PUBLIC",
+        "data_quality": {
+            "source": "crm",
+            "as_of": "2026-11-11T09:00:00Z",
+            "checks": [{"name": "rows", "result": "pass"}],
+        },
+    },
+    "expected_policy_hash": "e" * 64,
+}
+
+
+def test_the_sdks_field_lists_equal_the_servers_structs():
+    from verdifax._validation import (
+        _DATA_CHECK_FIELDS,
+        _DATA_QUALITY_FIELDS,
+        _JOB_FIELDS,
+        _POLICY_CONTEXT_FIELDS,
+    )
+
+    shape = server_shape()
+    assert set(EXECUTE_FIELDS) == shape[""]
+    assert set(ATTESTED_CONTEXT_FIELDS) == shape["attested_context"]
+    assert set(_POLICY_CONTEXT_FIELDS) == shape["policy_context"]
+    assert set(_DATA_QUALITY_FIELDS) == shape["policy_context.data_quality"]
+    assert set(_DATA_CHECK_FIELDS) == shape["policy_context.data_quality.checks"]
+    assert set(_JOB_FIELDS) == shape["job"]
+    # The server's hash is computed by the server, so the model leaves it out.
+    assert set(ReproducibilityContext.model_fields) == shape["reproducibility_context"] - {"hash"}
+
+
+@pytest.mark.parametrize("signing_key", [SEED, None], ids=["signed", "unsigned"])
+def test_attest_and_a_job_step_send_only_server_fields(signing_key):
+    shape = server_shape()
+    seen: list[httpx.Request] = []
+    client = sync_client(responder(seen, body=make_execute_response()), signing_key=signing_key)
+    client.attest(**FULL_RUN)
+    client.job("job-1").step("step-1", external_previous=["f" * 64], **FULL_RUN, final=True)
+    assert len(seen) == 2
+    for request in seen:
+        assert_run_body(json.loads(request.content), shape, signing_key is not None)
+
+
+@pytest.mark.parametrize("signing_key", [SEED, None], ids=["signed", "unsigned"])
+def test_a_batch_sends_only_server_fields(signing_key):
+    shape = server_shape()
+    seen: list[httpx.Request] = []
+    client = sync_client(responder(seen, body=BATCH), signing_key=signing_key)
+    row = {key: value for key, value in FULL_RUN.items() if key != "attested_context"}
+    row["attested_context"] = {"actor_id": "u-1"}
+    model_row = ExecuteRequest(payload_text="hello", **INPUTS, attested_context=AttestedContext())
+    client.execute_batch([row, model_row, {**ARGS, "payload": b"\xff\x00"}])
+    sent = json.loads(seen[0].content)
+    assert set(sent) == {"runs"}
+    for run in sent["runs"]:
+        assert_run_body(run, shape, signing_key is not None)
+
+
+@pytest.mark.parametrize("signing_key", [SEED, None], ids=["signed", "unsigned"])
+def test_a_determinism_check_sends_only_server_fields(signing_key):
+    shape = server_shape()
+    seen: list[httpx.Request] = []
+    client = sync_client(responder(seen, body=DETERMINISM), signing_key=signing_key)
+    args = {key: value for key, value in FULL_RUN.items() if key not in INPUTS and key != "payload"}
+    client.verify_determinism("hello", **INPUTS, **args)
+    assert_run_body(json.loads(seen[0].content), shape, signing_key is not None)
+
+
+async def test_async_run_bodies_send_only_server_fields():
+    shape = server_shape()
+    seen: list[httpx.Request] = []
+    async with async_client(responder(seen, body=make_execute_response())) as client:
+        await client.attest(**FULL_RUN)
+    assert_run_body(json.loads(seen[0].content), shape, True)
