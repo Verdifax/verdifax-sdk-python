@@ -217,7 +217,7 @@ def batch_response(
 
 
 def report_request(
-    format: str, ai_output_text: Optional[str]
+    format: str, ai_output_text: Optional[str], fallback: Optional[str] = None
 ) -> tuple[str, Optional[dict[str, Any]], Optional[dict[str, Any]]]:
     """The method, query and body of an audit PDF request.
 
@@ -226,12 +226,23 @@ def report_request(
     on the report's first page, marked as supplied by the caller, only when
     its SHA-256 is the hash the record seals; any other text is refused
     with a 422 and nothing is printed. Verdifax stores only the hash.
+
+    A format the server does not know is refused with a 400 that lists the
+    four names, unless ``fallback="comprehensive"`` asks for the
+    comprehensive report instead.
     """
     if ai_output_text is None:
-        return "GET", {"format": format}, None
+        params: dict[str, Any] = {"format": format}
+        if fallback is not None:
+            params["fallback"] = fallback
+        return "GET", params, None
     if not isinstance(ai_output_text, str) or ai_output_text == "":
         raise ValidationError("ai_output_text must be the AI's exact answer, a non-empty string")
-    return "POST", None, {"format": format, "ai_output_text": ai_output_text}
+    body: dict[str, Any] = {"format": format}
+    if fallback is not None:
+        body["fallback"] = fallback
+    body["ai_output_text"] = ai_output_text
+    return "POST", None, body
 
 
 def public_report_path(token: str) -> str:

@@ -9,7 +9,7 @@ HTTP 400 round-trip.
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Mapping, Optional, Sequence, Union
 
 from .exceptions import ValidationError
 
@@ -86,7 +86,27 @@ _POLICY_CONTEXT_FIELDS = frozenset(
         "object_type",
         "object_id",
         "classification",
+        "data_quality",
     }
+)
+_DATA_QUALITY_FIELDS = frozenset({"source", "as_of", "checks"})
+_DATA_CHECK_FIELDS = frozenset({"name", "result"})
+DATA_CHECK_RESULTS = ("pass", "fail", "warn")
+_DATA_SOURCE_MAX_BYTES = 200
+_DATA_CHECKS_MAX = 50
+_DATA_CHECK_NAME_MAX_BYTES = 100
+# The one form an as_of time may take, in ASCII digits, as the server checks
+# it (tests/sdk-data-quality-vector.json).
+_AS_OF_SHAPE = re.compile(
+    r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})"
+    r"(\.[0-9]{1,9})?(Z|[+-]([0-9]{2}):([0-9]{2}))"
+)
+# The characters Go's strings.TrimSpace removes, which the server uses to
+# find a blank check name. str.isspace() differs: it also counts U+001C to
+# U+001F. U+FEFF is in neither.
+_GO_SPACES = frozenset(
+    "\t\n\v\f\r \u0085\u00a0\u1680\u2028\u2029\u202f\u205f\u3000"
+    + "".join(chr(code) for code in range(0x2000, 0x200B))
 )
 
 
@@ -204,12 +224,107 @@ def _policy_value(name: str, value: Any) -> None:
             )
 
 
+def _valid_as_of(value: str) -> bool:
+    """Whether ``value`` is an as_of time the server accepts.
+
+    The form is ``2026-11-11T09:00:00Z`` or ``2026-11-11T09:00:00+05:30``,
+    optionally with a dot and 1 to 9 digits after the seconds, with a real
+    calendar date and time and an offset of at most 23:59.
+    """
+    shape = _AS_OF_SHAPE.fullmatch(value)
+    if shape is None:
+        return False
+    year, month, day, hour, minute, second = (int(shape.group(i)) for i in range(1, 7))
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    month_days = (31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if not 1 <= month <= 12 or not 1 <= day <= month_days[month - 1]:
+        return False
+    if hour > 23 or minute > 59 or second > 59:
+        return False
+    if shape.group(9) is not None and (int(shape.group(9)) > 23 or int(shape.group(10)) > 59):
+        return False
+    return True
+
+
+def _utf8_size(value: str, what: str) -> int:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ValidationError(f"{what} is not valid Unicode") from exc
+
+
+def _data_quality_block(value: Any) -> dict[str, Any]:
+    """Check a ``data_quality`` declaration the way the server checks it and
+    return a copy."""
+    if not isinstance(value, Mapping):
+        raise ValidationError(
+            f"policy_context data_quality must be a mapping, got {type(value).__name__}"
+        )
+    refuse_unknown_keys(value, _DATA_QUALITY_FIELDS, "policy_context data_quality")
+    block: dict[str, Any] = {}
+    if "source" in value:
+        source = value["source"]
+        if not isinstance(source, str):
+            raise ValidationError(
+                f"policy_context data_quality source must be a string, got {type(source).__name__}"
+            )
+        if _utf8_size(source, "policy_context data_quality source") > _DATA_SOURCE_MAX_BYTES:
+            raise ValidationError(
+                f"policy_context data_quality source is longer than {_DATA_SOURCE_MAX_BYTES} bytes"
+            )
+        block["source"] = source
+    if "as_of" in value:
+        as_of = value["as_of"]
+        if not isinstance(as_of, str) or (as_of != "" and not _valid_as_of(as_of)):
+            raise ValidationError(
+                "policy_context data_quality as_of must be a time of the form "
+                f"2026-11-11T09:00:00Z or 2026-11-11T09:00:00+05:30, got {as_of!r}"
+            )
+        block["as_of"] = as_of
+    if "checks" in value:
+        checks = value["checks"]
+        if isinstance(checks, (str, bytes, Mapping)) or not isinstance(checks, Sequence):
+            raise ValidationError("policy_context data_quality checks must be a list")
+        if len(checks) > _DATA_CHECKS_MAX:
+            raise ValidationError(
+                f"policy_context data_quality names more than {_DATA_CHECKS_MAX} checks"
+            )
+        seen: set[str] = set()
+        block["checks"] = []
+        for check in checks:
+            if not isinstance(check, Mapping):
+                raise ValidationError("each policy_context data_quality check must be a mapping")
+            refuse_unknown_keys(check, _DATA_CHECK_FIELDS, "policy_context data_quality check")
+            name, result = check.get("name"), check.get("result")
+            if (
+                not isinstance(name, str)
+                or all(char in _GO_SPACES for char in name)
+                or _utf8_size(name, "policy_context data_quality check name")
+                > _DATA_CHECK_NAME_MAX_BYTES
+                or name in seen
+            ):
+                raise ValidationError(
+                    "each policy_context data_quality check needs a distinct name of at most "
+                    f"{_DATA_CHECK_NAME_MAX_BYTES} bytes"
+                )
+            seen.add(name)
+            if not isinstance(result, str) or result not in DATA_CHECK_RESULTS:
+                raise ValidationError(
+                    f"policy_context data_quality check {name!r} has result {result!r}, "
+                    "not pass, fail or warn"
+                )
+            block["checks"].append({"name": name, "result": result})
+    return block
+
+
 def policy_context_block(context: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
     """Check a ``policy_context`` block and return a copy to send.
 
     The keys are ``actor_type``, ``mfa_satisfied``, ``session_age_seconds``,
-    ``object_type``, ``object_id`` and ``classification``, all optional.
-    ``None`` means no block.
+    ``object_type``, ``object_id``, ``classification`` and ``data_quality``,
+    all optional. ``data_quality`` is your declaration about the data the
+    decision used: ``source``, ``as_of`` and ``checks`` (each a ``name`` and a
+    ``result`` of pass, fail or warn). ``None`` means no block.
 
     Raises:
         ValidationError: If a key is unknown or a value is outside what the
@@ -223,9 +338,14 @@ def policy_context_block(context: Optional[Mapping[str, Any]]) -> Optional[dict[
     unknown = sorted(str(name) for name in context if name not in _POLICY_CONTEXT_FIELDS)
     if unknown:
         raise ValidationError(f"policy_context has unknown fields: {', '.join(unknown)}")
+    block: dict[str, Any] = {}
     for name, value in context.items():
+        if name == "data_quality":
+            block[name] = _data_quality_block(value)
+            continue
         _policy_value(name, value)
-    return dict(context)
+        block[name] = value
+    return block
 
 
 def check_policy_actor(

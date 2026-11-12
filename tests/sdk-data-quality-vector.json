@@ -1,0 +1,77 @@
+{
+ "_comment": "The data_quality values the server and every SDK must treat the same way. as_of: YYYY-MM-DDTHH:MM:SS, then optionally a dot and 1 to 9 digits, then Z or +HH:MM or -HH:MM, with ASCII digits only, a real calendar date, hours 00 to 23, minutes and seconds 00 to 59 and an offset of at most 23:59; an empty as_of is a time left out, not one of these. check_name: a name is refused when it is longer than 100 bytes of UTF-8 or holds nothing but the space characters Go's strings.TrimSpace removes (tab, newline, vertical tab, form feed, carriage return, space, U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000). U+FEFF and U+001C to U+001F are not among them. Copies are byte for byte (scripts/shared-code.json).",
+ "as_of": {
+  "accept": [
+   "2026-11-11T09:00:00Z",
+   "2026-11-11T09:00:00+05:30",
+   "2026-11-11T09:00:00-00:00",
+   "2026-11-11T09:00:00+23:59",
+   "2026-11-11T09:00:00.1Z",
+   "2026-11-11T09:00:00.123456789Z",
+   "2026-11-11T23:59:59-12:00",
+   "2024-02-29T00:00:00Z",
+   "2000-02-29T00:00:00Z",
+   "0000-02-29T00:00:00Z",
+   "2026-12-31T23:59:59.999999999+14:00"
+  ],
+  "refuse": [
+   "2026-11-11",
+   "2026-11-11T09:00Z",
+   "2026-11-11T09:00:00",
+   "2026-11-11 09:00:00Z",
+   "2026-11-11t09:00:00Z",
+   "2026-11-11T09:00:00z",
+   "2026-11-11T09:00:00+0530",
+   "2026-11-11T09:00:00+05:30:00",
+   "2026-11-11T09:00:00.Z",
+   "2026-11-11T09:00:00,5Z",
+   "2026-11-11T09:00:00.1234567890Z",
+   "2026-11-11T9:00:00Z",
+   "2026-1-11T09:00:00Z",
+   "2026-11-11T09:00:00+24:00",
+   "2026-11-11T09:00:00+05:60",
+   "2026-02-29T00:00:00Z",
+   "1900-02-29T00:00:00Z",
+   "2026-04-31T00:00:00Z",
+   "2026-13-01T00:00:00Z",
+   "2026-00-10T00:00:00Z",
+   "2026-11-00T00:00:00Z",
+   "2026-11-11T24:00:00Z",
+   "2026-11-11T23:60:00Z",
+   "2026-11-11T23:59:60Z",
+   " 2026-11-11T09:00:00Z",
+   "2026-11-11T09:00:00Z ",
+   "2026-11-11T09:00:00Z\n",
+   "+2026-11-11T09:00:00Z",
+   "99999-01-01T00:00:00Z",
+   "\uff12\uff10\uff12\uff16-11-11T09:00:00Z",
+   "2026-11-11T09:00:00\u0661Z",
+   "2026-11-11T0\u0669:00:00Z"
+  ]
+ },
+ "check_name": {
+  "accept": [
+   "complete",
+   "a",
+   "\ufeff",
+   "\u200b",
+   "\u001c\u001d\u001e\u001f",
+   " x ",
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+  ],
+  "refuse": [
+   "",
+   " ",
+   "\t\n\u000b\f\r",
+   "\u0085",
+   "\u00a0",
+   "\u1680",
+   "\u2000\u200a",
+   "\u2028\u2029",
+   "\u202f\u205f\u3000",
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+  ]
+ }
+}

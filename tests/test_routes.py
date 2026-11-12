@@ -163,6 +163,13 @@ async def test_async_download_audit_pdf_and_error():
 def _report_handler(seen: list[httpx.Request]):
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
+        if request.url.params.get("format") == "breif" and "fallback" not in request.url.params:
+            return httpx.Response(
+                400,
+                json={
+                    "error": 'unknown report format "breif": use brief, auditor, legal or comprehensive'
+                },
+            )
         if request.content and json.loads(request.content).get("ai_output_text") == "wrong":
             return httpx.Response(
                 422, json={"error": "supplied answer refused: nothing was printed"}
@@ -216,6 +223,139 @@ async def test_async_reports_carry_the_answer_when_given():
         ("GET", "/public/runs/tok/report.pdf"),
         ("POST", "/public/runs/tok/report.pdf"),
     ]
+
+
+def test_a_report_format_fallback_is_the_callers_choice():
+    """An unknown format is refused with the server's reason, unless the
+    caller asked for the comprehensive report as the fallback."""
+    seen: list[httpx.Request] = []
+    client = sync_client(_report_handler(seen))
+    with pytest.raises(APIError) as caught:
+        client.download_audit_pdf(7, "breif")
+    assert caught.value.status_code == 400
+    assert "brief, auditor, legal or comprehensive" in str(caught.value)
+    assert client.download_audit_pdf(7, "breif", fallback="comprehensive") == b"%PDF-report"
+    assert (
+        client.download_public_audit_pdf(
+            "tok", "breif", ai_output_text="the answer", fallback="comprehensive"
+        )
+        == b"%PDF-report"
+    )
+    got = [
+        (r.method, r.url.raw_path.decode(), json.loads(r.content) if r.content else None)
+        for r in seen
+    ]
+    assert got == [
+        ("GET", "/runs/7/report.pdf?format=breif", None),
+        ("GET", "/runs/7/report.pdf?format=breif&fallback=comprehensive", None),
+        (
+            "POST",
+            "/public/runs/tok/report.pdf",
+            {"format": "breif", "fallback": "comprehensive", "ai_output_text": "the answer"},
+        ),
+    ]
+
+
+async def test_async_report_format_fallback_is_the_callers_choice():
+    seen: list[httpx.Request] = []
+    async with async_client(_report_handler(seen)) as client:
+        with pytest.raises(APIError):
+            await client.download_public_audit_pdf("tok", "breif")
+        assert (
+            await client.download_audit_pdf(7, "breif", fallback="comprehensive") == b"%PDF-report"
+        )
+    assert [r.url.raw_path.decode() for r in seen] == [
+        "/public/runs/tok/report.pdf?format=breif",
+        "/runs/7/report.pdf?format=breif&fallback=comprehensive",
+    ]
+
+
+def test_lists_send_lenient_only_when_asked():
+    """``lenient=True`` asks the server to ignore or replace a value it
+    cannot read; every list and search sends lenient=1 only then."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True, "runs": [], "total": 0, "attestations": []})
+
+    client = sync_client(handler)
+    client.list_runs(lenient=True)
+    client.list_account_runs(limit=5, lenient=True)
+    client.search_runs(from_="2026-11-11", lenient=True)
+    client.list_attestations(lenient=True)
+    client.list_runs(limit=5)
+    assert [r.url.raw_path.decode() for r in seen] == [
+        "/runs?lenient=1",
+        "/account/runs?limit=5&lenient=1",
+        "/runs/search?lenient=1&from=2026-11-11",
+        "/attestations?lenient=1",
+        "/runs?limit=5",
+    ]
+
+
+async def test_async_lists_send_lenient_only_when_asked():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True, "runs": [], "total": 0, "attestations": []})
+
+    async with async_client(handler) as client:
+        await client.list_runs(lenient=True)
+        await client.list_account_runs(lenient=True)
+        await client.search_runs(to="x", lenient=True)
+        await client.list_attestations(lenient=True)
+    assert [r.url.raw_path.decode() for r in seen] == [
+        "/runs?lenient=1",
+        "/account/runs?lenient=1",
+        "/runs/search?lenient=1&to=x",
+        "/attestations?lenient=1",
+    ]
+
+
+def test_public_signoff_routes():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "run_id": 7,
+                "read": True,
+                "signoffs": [],
+                "decision_in_force": {"decision": "approve", "run_id": 9, "on": "job_final_step"},
+            },
+        )
+
+    client = sync_client(handler)
+    assert client.get_public_signoff_by_token("a b")["decision_in_force"]["run_id"] == 9
+    assert client.get_public_signoff(7)["run_id"] == 7
+    assert [r.url.raw_path.decode() for r in seen] == [
+        "/public/runs/a%20b/signoff.json",
+        "/runs/7/signoff.json",
+    ]
+    for call in (
+        lambda: client.get_public_signoff_by_token(""),
+        lambda: client.get_public_signoff(0),
+    ):
+        with pytest.raises(ValidationError):
+            call()
+
+
+async def test_async_public_signoff_routes():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True, "run_id": 7, "read": True, "signoffs": []})
+
+    async with async_client(handler) as client:
+        await client.get_public_signoff_by_token("tok")
+        await client.get_public_signoff(7)
+    assert [r.url.path for r in seen] == ["/public/runs/tok/signoff.json", "/runs/7/signoff.json"]
 
 
 def test_dcae_verify_posts_the_bundle():

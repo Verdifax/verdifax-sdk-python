@@ -363,9 +363,11 @@ class AsyncVerdifaxClient:
             raise wrap_transport_error(exc) from exc
         return Run.model_validate(parse_response(response))
 
-    async def list_runs(self, limit: Optional[int] = None, offset: Optional[int] = None) -> RunList:
+    async def list_runs(
+        self, limit: Optional[int] = None, offset: Optional[int] = None, lenient: bool = False
+    ) -> RunList:
         """Async version of :meth:`VerdifaxClient.list_runs`."""
-        params = query_params(limit=limit, offset=offset)
+        params = query_params(limit=limit, offset=offset, lenient="1" if lenient else None)
         try:
             response = await self._http.get("/runs", params=params)
         except httpx.HTTPError as exc:
@@ -382,6 +384,7 @@ class AsyncVerdifaxClient:
         to: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        lenient: bool = False,
     ) -> RunList:
         """Async version of :meth:`VerdifaxClient.search_runs`."""
         params = query_params(
@@ -391,6 +394,7 @@ class AsyncVerdifaxClient:
             status=status,
             limit=limit,
             offset=offset,
+            lenient="1" if lenient else None,
             **{"from": from_, "to": to},
         )
         try:
@@ -513,10 +517,13 @@ class AsyncVerdifaxClient:
         return await self._get_json("/stats")
 
     async def list_attestations(
-        self, limit: Optional[int] = None, offset: Optional[int] = None
+        self, limit: Optional[int] = None, offset: Optional[int] = None, lenient: bool = False
     ) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.list_attestations`."""
-        return await self._get_json("/attestations", query_params(limit=limit, offset=offset))
+        return await self._get_json(
+            "/attestations",
+            query_params(limit=limit, offset=offset, lenient="1" if lenient else None),
+        )
 
     async def get_attestation(self, attestation_id: int) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.get_attestation`."""
@@ -558,19 +565,31 @@ class AsyncVerdifaxClient:
         return report
 
     async def download_audit_pdf(
-        self, run_id: int, format: str = "comprehensive", ai_output_text: Optional[str] = None
+        self,
+        run_id: int,
+        format: str = "comprehensive",
+        ai_output_text: Optional[str] = None,
+        fallback: Optional[str] = None,
     ) -> bytes:
         """Async version of :meth:`VerdifaxClient.download_audit_pdf`."""
-        return await self._report_pdf(run_path(run_id, "/report.pdf"), format, ai_output_text)
+        return await self._report_pdf(
+            run_path(run_id, "/report.pdf"), format, ai_output_text, fallback
+        )
 
     async def download_public_audit_pdf(
-        self, token: str, format: str = "comprehensive", ai_output_text: Optional[str] = None
+        self,
+        token: str,
+        format: str = "comprehensive",
+        ai_output_text: Optional[str] = None,
+        fallback: Optional[str] = None,
     ) -> bytes:
         """Async version of :meth:`VerdifaxClient.download_public_audit_pdf`."""
-        return await self._report_pdf(public_report_path(token), format, ai_output_text)
+        return await self._report_pdf(public_report_path(token), format, ai_output_text, fallback)
 
-    async def _report_pdf(self, path: str, format: str, ai_output_text: Optional[str]) -> bytes:
-        method, params, body = report_request(format, ai_output_text)
+    async def _report_pdf(
+        self, path: str, format: str, ai_output_text: Optional[str], fallback: Optional[str]
+    ) -> bytes:
+        method, params, body = report_request(format, ai_output_text, fallback)
         try:
             response = await self._http.request(method, path, params=params, json=body)
         except httpx.HTTPError as exc:
@@ -598,6 +617,17 @@ class AsyncVerdifaxClient:
             raise ValidationError("token is required")
         path = f"/public/runs/{quote(token, safe='')}/receipt.json"
         return checked_response(await self._get(path)).text
+
+    async def get_public_signoff_by_token(self, token: str) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.get_public_signoff_by_token`."""
+        if not token:
+            raise ValidationError("token is required")
+        return await self._get_json(f"/public/runs/{quote(token, safe='')}/signoff.json")
+
+    async def get_public_signoff(self, run_id: int) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.get_public_signoff`."""
+        validate_positive_id(run_id, "run_id")
+        return await self._get_json(f"/runs/{run_id}/signoff.json")
 
     async def list_deletion_receipts(self, run_id: int) -> list[dict[str, Any]]:
         """Async version of :meth:`VerdifaxClient.list_deletion_receipts`."""
@@ -692,10 +722,10 @@ class AsyncVerdifaxClient:
         return result
 
     async def list_account_runs(
-        self, limit: Optional[int] = None, offset: Optional[int] = None
+        self, limit: Optional[int] = None, offset: Optional[int] = None, lenient: bool = False
     ) -> RunList:
         """Async version of :meth:`VerdifaxClient.list_account_runs`."""
-        params = query_params(limit=limit, offset=offset)
+        params = query_params(limit=limit, offset=offset, lenient="1" if lenient else None)
         return RunList.model_validate(await self._get_json(f"{ACCOUNT_PATH}/runs", params))
 
     async def export_account_runs(

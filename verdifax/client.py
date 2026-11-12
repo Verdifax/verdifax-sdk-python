@@ -303,7 +303,9 @@ class VerdifaxClient:
                 and repeats removed for you. :meth:`job` builds this block.
             policy_context: Optional facts for the active policy's rules:
                 ``actor_type``, ``mfa_satisfied``, ``session_age_seconds``,
-                ``object_type``, ``object_id`` and ``classification``. An
+                ``object_type``, ``object_id``, ``classification`` and
+                ``data_quality`` (your declaration about the data the decision
+                used: ``source``, ``as_of`` and named ``checks``). An
                 unknown key or a value the server refuses raises here.
                 ``actor_type``, ``mfa_satisfied`` and ``session_age_seconds``
                 describe the attested actor, so they need an
@@ -535,9 +537,15 @@ class VerdifaxClient:
             raise wrap_transport_error(exc) from exc
         return Run.model_validate(parse_response(response))
 
-    def list_runs(self, limit: Optional[int] = None, offset: Optional[int] = None) -> RunList:
-        """List this key's runs from ``GET /runs``. The server caps ``limit`` at 500."""
-        params = query_params(limit=limit, offset=offset)
+    def list_runs(
+        self, limit: Optional[int] = None, offset: Optional[int] = None, lenient: bool = False
+    ) -> RunList:
+        """List this key's runs from ``GET /runs``. The server caps ``limit`` at 500.
+
+        ``lenient=True`` asks the server to replace a value it cannot read
+        instead of raising APIError (400).
+        """
+        params = query_params(limit=limit, offset=offset, lenient="1" if lenient else None)
         try:
             response = self._http.get("/runs", params=params)
         except httpx.HTTPError as exc:
@@ -554,12 +562,13 @@ class VerdifaxClient:
         to: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        lenient: bool = False,
     ) -> RunList:
         """Search this key's runs with ``GET /runs/search``.
 
         ``manifest_hash`` matches a prefix. ``from_`` and ``to`` are RFC 3339
-        times; the server ignores one it cannot parse here, unlike
-        :meth:`export_runs`, which refuses it.
+        times. A value the server cannot read raises APIError (400) unless
+        ``lenient=True``, which asks the server to leave it out instead.
         """
         params = query_params(
             manifest_hash=manifest_hash,
@@ -568,6 +577,7 @@ class VerdifaxClient:
             status=status,
             limit=limit,
             offset=offset,
+            lenient="1" if lenient else None,
             **{"from": from_, "to": to},
         )
         try:
@@ -731,10 +741,17 @@ class VerdifaxClient:
         return self._get_json("/stats")
 
     def list_attestations(
-        self, limit: Optional[int] = None, offset: Optional[int] = None
+        self, limit: Optional[int] = None, offset: Optional[int] = None, lenient: bool = False
     ) -> dict[str, Any]:
-        """List attestation receipts from ``GET /attestations``, newest first."""
-        return self._get_json("/attestations", query_params(limit=limit, offset=offset))
+        """List attestation receipts from ``GET /attestations``, newest first.
+
+        ``lenient=True`` asks the server to replace a value it cannot read
+        instead of raising APIError (400).
+        """
+        return self._get_json(
+            "/attestations",
+            query_params(limit=limit, offset=offset, lenient="1" if lenient else None),
+        )
 
     def get_attestation(self, attestation_id: int) -> dict[str, Any]:
         """Fetch one attestation receipt from ``GET /attestations/{id}``."""
@@ -776,25 +793,39 @@ class VerdifaxClient:
         return report
 
     def download_audit_pdf(
-        self, run_id: int, format: str = "comprehensive", ai_output_text: Optional[str] = None
+        self,
+        run_id: int,
+        format: str = "comprehensive",
+        ai_output_text: Optional[str] = None,
+        fallback: Optional[str] = None,
     ) -> bytes:
         """The audit PDF bytes. ``format`` is brief, auditor, legal or comprehensive.
 
         With ``ai_output_text``, the AI's exact answer, the report prints it on
         its first page, marked as supplied by the caller, only when its SHA-256
         is the hash the record seals; other text raises APIError (422).
+
+        A format the server does not know raises APIError (400) with the four
+        names, unless ``fallback="comprehensive"`` asks for the comprehensive
+        report instead.
         """
-        return self._report_pdf(run_path(run_id, "/report.pdf"), format, ai_output_text)
+        return self._report_pdf(run_path(run_id, "/report.pdf"), format, ai_output_text, fallback)
 
     def download_public_audit_pdf(
-        self, token: str, format: str = "comprehensive", ai_output_text: Optional[str] = None
+        self,
+        token: str,
+        format: str = "comprehensive",
+        ai_output_text: Optional[str] = None,
+        fallback: Optional[str] = None,
     ) -> bytes:
         """The audit PDF of a published record a share token points to, with
         the answer printed as :meth:`download_audit_pdf` prints it. No API key needed."""
-        return self._report_pdf(public_report_path(token), format, ai_output_text)
+        return self._report_pdf(public_report_path(token), format, ai_output_text, fallback)
 
-    def _report_pdf(self, path: str, format: str, ai_output_text: Optional[str]) -> bytes:
-        method, params, body = report_request(format, ai_output_text)
+    def _report_pdf(
+        self, path: str, format: str, ai_output_text: Optional[str], fallback: Optional[str]
+    ) -> bytes:
+        method, params, body = report_request(format, ai_output_text, fallback)
         try:
             response = self._http.request(method, path, params=params, json=body)
         except httpx.HTTPError as exc:
@@ -824,6 +855,22 @@ class VerdifaxClient:
             raise ValidationError("token is required")
         path = f"/public/runs/{quote(token, safe='')}/receipt.json"
         return checked_response(self._get(path)).text
+
+    def get_public_signoff_by_token(self, token: str) -> dict[str, Any]:
+        """The sign-off a published run's audit report prints: the decision in
+        force (``decision_in_force``), and for a step of a job the job's
+        decision on its final step (``job``). No API key needed. The note, the
+        approver key and the signatures are not served; ``verdifax-verify
+        --signoff`` checks them from the account's sign-off records."""
+        if not token:
+            raise ValidationError("token is required")
+        return self._get_json(f"/public/runs/{quote(token, safe='')}/signoff.json")
+
+    def get_public_signoff(self, run_id: int) -> dict[str, Any]:
+        """:meth:`get_public_signoff_by_token` for a run made public before
+        share tokens, by its number. No API key needed."""
+        validate_positive_id(run_id, "run_id")
+        return self._get_json(f"/runs/{run_id}/signoff.json")
 
     def list_deletion_receipts(self, run_id: int) -> list[dict[str, Any]]:
         """The CRES deletion receipts bound to a run."""
@@ -1059,14 +1106,16 @@ class VerdifaxClient:
         return result
 
     def list_account_runs(
-        self, limit: Optional[int] = None, offset: Optional[int] = None
+        self, limit: Optional[int] = None, offset: Optional[int] = None, lenient: bool = False
     ) -> RunList:
         """List the runs of every key in the account from ``GET /account/runs``.
 
         The server caps ``limit`` at 500. The list covers the runs the
         account's keys made through Verdifax, not runs made elsewhere.
+        ``lenient=True`` asks the server to replace a value it cannot read
+        instead of raising APIError (400).
         """
-        params = query_params(limit=limit, offset=offset)
+        params = query_params(limit=limit, offset=offset, lenient="1" if lenient else None)
         return RunList.model_validate(self._get_json(f"{ACCOUNT_PATH}/runs", params))
 
     def export_account_runs(

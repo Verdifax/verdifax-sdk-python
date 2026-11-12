@@ -582,3 +582,41 @@ __all__ = [
     "webhook_path",
     "with_place",
 ]
+
+
+def pending_signoffs(events: Iterable[Mapping[str, Any]]) -> list[int]:
+    """The runs among ``events`` whose allowing policy rule requires a person's
+    sign-off (their ``run.sealed`` entry says ``signoff_required``) and on
+    whose record no approval is in force: the last sign-off recorded on the
+    record, if any, is not an approval. Pass the account's feed from its
+    start, or a page that includes each run's sign-offs, so a sign-off
+    recorded later is seen (round 58, B7). Returned in feed order.
+
+    Raises ``VerdifaxError`` for a ``run.sealed`` entry that names no run.
+    """
+    order: list[int] = []
+    required: set[int] = set()
+    latest: dict[int, Any] = {}
+    for event in events:
+        data = event.get("data") or {}
+        entry = data.get("entry") or {}
+        kind = data.get("kind")
+        if kind == "run.sealed":
+            run = entry.get("run_id")
+            if not isinstance(run, int) or isinstance(run, bool):
+                raise VerdifaxError(
+                    f"verdifax: the run.sealed entry of event {event.get('id')} names no run"
+                )
+            if entry.get("signoff_required") is True and run not in required:
+                required.add(run)
+                order.append(run)
+        elif kind == "signoff.recorded":
+            target = entry.get("target") or {}
+            run = target.get("run_id")
+            if (
+                target.get("kind") == "record"
+                and isinstance(run, int)
+                and not isinstance(run, bool)
+            ):
+                latest[run] = entry.get("decision")
+    return [run for run in order if latest.get(run) != "approve"]

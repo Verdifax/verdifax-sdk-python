@@ -218,6 +218,12 @@
       "python": "MAX_BATCH_ROWS",
       "r": "verdifax_max_batch_rows"
     },
+    "pending_signoffs": {
+      "go": "PendingSignOffs",
+      "node": "pendingSignOffs",
+      "python": "pending_signoffs",
+      "r": "verdifax_pending_signoffs"
+    },
     "policy_activation_approval": {
       "go": "PolicyActivationApproval",
       "node": "policyActivationApproval",
@@ -814,7 +820,8 @@
     },
     "GET /public/runs/{token}/report.pdf": {
       "go": [
-        "DownloadPublicAuditPDF"
+        "DownloadPublicAuditPDF",
+        "DownloadPublicAuditPDFWithOptions"
       ],
       "node": [
         "downloadPublicAuditPDF"
@@ -1108,7 +1115,8 @@
     },
     "GET /runs/{id}/report.pdf": {
       "go": [
-        "DownloadAuditPDF"
+        "DownloadAuditPDF",
+        "DownloadAuditPDFWithOptions"
       ],
       "node": [
         "downloadAuditPDF"
@@ -1531,7 +1539,8 @@
     },
     "POST /public/runs/{token}/report.pdf": {
       "go": [
-        "DownloadPublicAuditPDF"
+        "DownloadPublicAuditPDF",
+        "DownloadPublicAuditPDFWithOptions"
       ],
       "node": [
         "downloadPublicAuditPDF"
@@ -1548,7 +1557,8 @@
     },
     "POST /runs/{id}/report.pdf": {
       "go": [
-        "DownloadAuditPDFWithAnswer"
+        "DownloadAuditPDFWithAnswer",
+        "DownloadAuditPDFWithOptions"
       ],
       "node": [
         "downloadAuditPDF"
@@ -1629,6 +1639,40 @@
       ],
       "r": [
         "verdifax_set_account_time_zone"
+      ]
+    },
+    "GET /public/runs/{token}/signoff.json": {
+      "go": [
+        "GetPublicSignOffByToken"
+      ],
+      "node": [
+        "getPublicSignOffByToken"
+      ],
+      "python": [
+        "get_public_signoff_by_token"
+      ],
+      "python_async": [
+        "get_public_signoff_by_token"
+      ],
+      "r": [
+        "verdifax_get_public_signoff_by_token"
+      ]
+    },
+    "GET /runs/{id}/signoff.json": {
+      "go": [
+        "GetPublicSignOff"
+      ],
+      "node": [
+        "getPublicSignOff"
+      ],
+      "python": [
+        "get_public_signoff"
+      ],
+      "python_async": [
+        "get_public_signoff"
+      ],
+      "r": [
+        "verdifax_get_public_signoff"
       ]
     }
   },

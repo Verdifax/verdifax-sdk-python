@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import pathlib
 import re
 from typing import Any, Callable
 
@@ -102,6 +103,11 @@ FULL_CONTEXT = {
     "object_type": "transaction",
     "object_id": "txn-1",
     "classification": "CONFIDENTIAL",
+    "data_quality": {
+        "source": "core-banking",
+        "as_of": "2026-11-11T09:00:00Z",
+        "checks": [{"name": "complete", "result": "pass"}, {"name": "drift", "result": "warn"}],
+    },
 }
 OBJECT_CONTEXT = {"object_type": "transaction", "classification": "RESTRICTED"}
 
@@ -826,6 +832,36 @@ BAD_CONTEXTS = [
     ({"object_id": "\u00e9" * 129}, "longer than 256 bytes"),
     ({"object_id": 7}, "object_id"),
     ({"object_id": "\udc80"}, "Unicode"),
+    ({"data_quality": "fresh"}, "data_quality must be a mapping"),
+    ({"data_quality": {"asOf": "2026-11-11T09:00:00Z"}}, "unknown fields: asOf"),
+    ({"data_quality": {"source": "s" * 201}}, "longer than 200 bytes"),
+    ({"data_quality": {"source": "\u00e9" * 101}}, "longer than 200 bytes"),
+    ({"data_quality": {"source": 7}}, "source must be a string"),
+    ({"data_quality": {"source": "\udc80"}}, "Unicode"),
+    ({"data_quality": {"as_of": "2026-11-11"}}, "as_of"),
+    ({"data_quality": {"as_of": 1762851600}}, "as_of"),
+    ({"data_quality": {"checks": {"name": "x"}}}, "checks must be a list"),
+    ({"data_quality": {"checks": "complete"}}, "checks must be a list"),
+    (
+        {"data_quality": {"checks": [{"name": f"c{i}", "result": "pass"} for i in range(51)]}},
+        "more than 50 checks",
+    ),
+    ({"data_quality": {"checks": ["complete"]}}, "check must be a mapping"),
+    (
+        {"data_quality": {"checks": [{"name": "x", "result": "pass", "why": "y"}]}},
+        "unknown fields: why",
+    ),
+    ({"data_quality": {"checks": [{"name": " ", "result": "pass"}]}}, "distinct name"),
+    ({"data_quality": {"checks": [{"result": "pass"}]}}, "distinct name"),
+    (
+        {
+            "data_quality": {
+                "checks": [{"name": "x", "result": "pass"}, {"name": "x", "result": "fail"}]
+            }
+        },
+        "distinct name",
+    ),
+    ({"data_quality": {"checks": [{"name": "x", "result": "ok"}]}}, "not pass, fail or warn"),
 ]
 
 
@@ -1014,3 +1050,44 @@ def test_no_source_file_has_a_long_dash():
     for path in files:
         text = path.read_text(encoding="utf-8")
         assert "\u2014" not in text and "\u2013" not in text, path
+
+
+# ── data_quality values, held to the server's by one shared file ─────────────
+
+DATA_QUALITY_VECTOR = json.loads(
+    (pathlib.Path(__file__).parent / "sdk-data-quality-vector.json").read_text(encoding="utf-8")
+)
+
+
+def _accepted(context: dict[str, Any]) -> bool:
+    try:
+        policy_context_block(context)
+    except ValidationError:
+        return False
+    return True
+
+
+def test_as_of_times_match_the_shared_vector():
+    lists = DATA_QUALITY_VECTOR["as_of"]
+    assert lists["accept"] and lists["refuse"]
+    for as_of in lists["accept"]:
+        assert _accepted({"data_quality": {"as_of": as_of}}), as_of
+    for as_of in lists["refuse"]:
+        assert not _accepted({"data_quality": {"as_of": as_of}}), as_of
+
+
+def test_check_names_match_the_shared_vector():
+    lists = DATA_QUALITY_VECTOR["check_name"]
+    assert lists["accept"] and lists["refuse"]
+    for name in lists["accept"]:
+        assert _accepted({"data_quality": {"checks": [{"name": name, "result": "pass"}]}}), name
+    for name in lists["refuse"]:
+        assert not _accepted({"data_quality": {"checks": [{"name": name, "result": "pass"}]}}), name
+
+
+def test_the_sent_declaration_is_a_copy():
+    declared = {"checks": [{"name": "complete", "result": "pass"}]}
+    block = policy_context_block({"data_quality": declared})
+    assert block == {"data_quality": declared}
+    declared["checks"].append({"name": "later", "result": "fail"})
+    assert block["data_quality"]["checks"] == [{"name": "complete", "result": "pass"}]

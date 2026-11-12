@@ -31,7 +31,7 @@ from typing import (
 
 from ._requests import MAX_BATCH_ROWS, format_provider_payload
 from ._retry import DEFAULT_MAX_RETRIES
-from ._signals import SIGNAL_KINDS, signal_event_hash, verify_webhook
+from ._signals import SIGNAL_KINDS, pending_signoffs, signal_event_hash, verify_webhook
 from ._signoffs import approver_key_proof, signoff_preimage
 from ._signing import (
     RequestKeyPair,
@@ -288,6 +288,7 @@ __all__ = [
     "section0",
     "sign_request",
     "sign_request_v2",
+    "pending_signoffs",
     "signal_event_hash",
     "signoff_preimage",
     "validate_hex64",

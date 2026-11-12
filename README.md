@@ -98,14 +98,14 @@ asyncio.run(main())
 | `verify_determinism(...)` | `POST /execute/verify-determinism` | required |
 | `get_run(run_id)` | `GET /runs/{run_id}` | required |
 | `verify_run(run_id)` | `GET /runs/{run_id}/verify` | required |
-| `list_runs(limit, offset)` | `GET /runs` | required |
+| `list_runs(limit, offset, lenient=False)` | `GET /runs`. A value the server cannot read raises `APIError` (400) unless `lenient=True`; `search_runs`, `list_account_runs` and `list_attestations` take `lenient` too | required |
 | `search_runs(...)` | `GET /runs/search` | required |
 | `export_runs(from_, to, job_id)` | `GET /runs/export` | required |
 | `export_runs_csv(from_, to, job_id)` | `GET /runs/export?format=csv` | required |
 | `get_run_artifacts(run_id)` | `GET /runs/{run_id}/artifacts` | required |
 | `get_run_report(run_id)` | `GET /runs/{run_id}/report` | required |
-| `download_audit_pdf(run_id, format, ai_output_text=None)` | `GET /runs/{run_id}/report.pdf`, or `POST` with the AI's answer, printed when its SHA-256 is the sealed hash | required |
-| `download_public_audit_pdf(token, format, ai_output_text=None)` | `GET` or `POST /public/runs/{token}/report.pdf` | none |
+| `download_audit_pdf(run_id, format, ai_output_text=None, fallback=None)` | `GET /runs/{run_id}/report.pdf`, or `POST` with the AI's answer, printed when its SHA-256 is the sealed hash. An unknown format raises `APIError` (400) unless `fallback="comprehensive"` | required |
+| `download_public_audit_pdf(token, format, ai_output_text=None, fallback=None)` | `GET` or `POST /public/runs/{token}/report.pdf` | none |
 | `get_allow_token(run_id)` | `GET /runs/{run_id}/allow-token` | required |
 | `get_deny_receipt(run_id)` | `GET /runs/{run_id}/deny-receipt` | required |
 | `get_ccv_halt_receipt(run_id)` | `GET /runs/{run_id}/ccv-halt-receipt` | required |
@@ -118,6 +118,8 @@ asyncio.run(main())
 | `get_attestation(attestation_id)` | `GET /attestations/{id}` | required |
 | `get_public_bundle(run_id)` | `GET /runs/{run_id}/bundle.json` | none |
 | `get_public_bundle_by_token(token)` | `GET /public/runs/{token}/bundle.json` | none |
+| `get_public_signoff(run_id)` | `GET /runs/{run_id}/signoff.json`: the sign-off a published run's audit report prints, and its job's decision in force | none |
+| `get_public_signoff_by_token(token)` | `GET /public/runs/{token}/signoff.json` | none |
 | `dcae_verify(bundle)` | `POST /dcae/verify` | none |
 | `register_request_key()` | `POST /keys/request-key` | required |
 | `rotate_request_key(new_signing_key)` | `POST /keys/request-key` | required |
@@ -374,7 +376,9 @@ receipt = client.attest(
 )
 ```
 
-Every key of `policy_context` is optional. `actor_type` is `agent`, `user`, `service` or `system`; `mfa_satisfied` is a `bool`; `session_age_seconds` is a non-negative `int`; `object_type` is `text`, `transaction`, `code`, `data`, `model` or `file`; `object_id` is a string of at most 256 bytes; and `classification` is `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, `RESTRICTED`, `TOP_SECRET` or `TS_SCI`. The client raises `ValidationError` for an unknown key or any other value before sending, because a misspelt field must never be dropped: a rule on it would read its zero value. `actor_type`, `mfa_satisfied` and `session_age_seconds` describe the attested actor, so they need an `attested_context` that names the actor, such as its `actor_id`; the client and the server refuse them without one. `object_type`, `object_id` and `classification` work without it. The provider helpers attest an AI assistant, so they can send all six.
+Every key of `policy_context` is optional. `actor_type` is `agent`, `user`, `service` or `system`; `mfa_satisfied` is a `bool`; `session_age_seconds` is a non-negative `int`; `object_type` is `text`, `transaction`, `code`, `data`, `model` or `file`; `object_id` is a string of at most 256 bytes; `classification` is `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, `RESTRICTED`, `TOP_SECRET` or `TS_SCI`; and `data_quality` is described below. The client raises `ValidationError` for an unknown key or any other value before sending, because a misspelt field must never be dropped: a rule on it would read its zero value. `actor_type`, `mfa_satisfied` and `session_age_seconds` describe the attested actor, so they need an `attested_context` that names the actor, such as its `actor_id`; the client and the server refuse them without one. `object_type`, `object_id` and `classification` work without it. The provider helpers attest an AI assistant, so they can send all seven.
+
+`data_quality` is your declaration about the data the decision used, a mapping of `source` (at most 200 bytes), `as_of` (a time such as `2026-11-11T09:00:00Z` or `2026-11-11T09:00:00+05:30`) and `checks`, a list of up to 50 mappings, each a distinct `name` of at most 100 bytes and a `result` of `pass`, `fail` or `warn`. It needs no attested actor. It is sealed with the other values, a policy's `data_quality` condition can require and test it, and Verdifax judges none of it. The client raises `ValidationError` for a declaration the server would refuse before sending.
 
 `expected_policy_hash` is 64 lowercase hex characters. When another policy is active, the server refuses the run with 409, and the client raises `APIError`. `attest`, `execute`, each row of `execute_batch`, `verify_determinism`, the provider helpers and job steps all take both fields. They go into the request before it is signed, so a signed request covers them.
 
@@ -525,6 +529,8 @@ for event in client.follow_signals(after=last_sequence_read):
 `follow_signals(after=0, wait=25, as_owner=False)` reads page after page, going on from each page's `next_after`, so it never skips or repeats an event; a page that would skip or repeat one raises `VerdifaxError`. It is a generator, and an async generator on `AsyncVerdifaxClient` (use `async for`); stop by leaving the loop. A failed page is retried with the client's normal retry policy, and the error it then raises carries `last_sequence`, the last sequence read, to pass as `after` to go on. With `wait=0` it pauses one second after an empty page.
 
 Save a page with `json.dump(client.get_signals(), file)`. `verdifax-verify --signals` checks a saved feed. `verdifax.signal_event_hash(kind, entry_hash, account, sequence, previous_signal_hash)` recomputes an event's hash, the hex SHA-256 of `verdifax.signal.v1` and those values joined by zero bytes, and makes no request.
+
+`verdifax.pending_signoffs(events)` returns, in feed order, the run ids whose allowing policy rule requires a person's sign-off (their `run.sealed` event says `signoff_required`) and on which no approval is in force: the last sign-off on the record, if any, is not an approval. Pass the feed from its start, or pages that include each run's sign-offs. It makes no request.
 
 ### Webhooks
 
