@@ -500,7 +500,7 @@ The note's text is never sent. The client sends only its SHA-256 as `note_hash`,
 
 A sign-off shows that the holder of a registered approver key signed that decision on that exact result, and that Verdifax logged it on the public log. It does not show that the review was careful, that the result is right, or who the person is: a key is not an identity. A sign-off gates nothing on its own. A later sign-off on the same result supersedes the earlier one, and nothing is deleted. Verdifax did not review the result.
 
-`get_signoffs(run_id)` returns a run's sign-offs, oldest first, in the form `verdifax-verify --signoff FILE` reads; the latest is the decision in force. `get_signoff_history()` returns the account's whole chain for the owner key, in the form `verdifax-verify --signoff-history FILE` reads, and the owner's `export_account_runs` carries the same chain as `signoffs`. `verdifax-verify` reads sign-offs since v0.22.0.
+`get_signoffs(run_id)` returns a run's sign-offs, oldest first, in the form `verdifax-verify --signoff FILE` reads; the decision in force is the latest, except on a job's final step, where the latest sign-off on the whole job governs; `verdifax-verify --signoff` names it. `get_signoff_history()` returns the account's whole chain for the owner key, in the form `verdifax-verify --signoff-history FILE` reads, ending with the chain's head statement (`verdifax.signoff-head.v1`), anchored on the public log, from which the verifier reports the history complete as of that time (since v0.31.0), and the owner's `export_account_runs` carries the same chain as `signoffs`. `verdifax-verify` reads sign-offs since v0.22.0.
 
 `verdifax.signoff_preimage(chain_id, previous_signoff_hash, target, decision, note_hash, signed_at, nonce)` returns the bytes an approver key signs, and `verdifax.approver_key_proof(private_key)` returns the public key and proof to register. Neither makes a request.
 
@@ -530,7 +530,7 @@ for event in client.follow_signals(after=last_sequence_read):
 
 Save a page with `json.dump(client.get_signals(), file)`. `verdifax-verify --signals` checks a saved feed. `verdifax.signal_event_hash(kind, entry_hash, account, sequence, previous_signal_hash)` recomputes an event's hash, the hex SHA-256 of `verdifax.signal.v1` and those values joined by zero bytes, and makes no request.
 
-`verdifax.pending_signoffs(events)` returns, in feed order, the run ids whose allowing policy rule requires a person's sign-off (their `run.sealed` event says `signoff_required`) and on which no approval is in force: the last sign-off on the record, if any, is not an approval. Pass the feed from its start, or pages that include each run's sign-offs. It makes no request.
+`verdifax.pending_signoffs(events)` returns, in feed order, the run ids whose allowing policy rule requires a person's sign-off (their `run.sealed` event says `signoff_required`) and on which no approval is in force, read as `verdifax-verify` reads it: the latest sign-off on the run's whole job governs when there is one, and otherwise the latest sign-off on its record; a receipt sign-off does not count. Pass the feed from its start, or pages that include each run's sign-offs. It makes no request.
 
 ### Webhooks
 

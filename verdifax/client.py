@@ -859,7 +859,13 @@ class VerdifaxClient:
     def get_public_signoff_by_token(self, token: str) -> dict[str, Any]:
         """The sign-off a published run's audit report prints: the decision in
         force (``decision_in_force``), and for a step of a job the job's
-        decision on its final step (``job``). No API key needed. The note, the
+        decision on its final step (``job``). ``decision_in_force`` names the
+        kind of sign-off in force (``signed_as``: record, receipt or job), its
+        place (``sequence``) and time (``signed_at``) and, when the job's
+        decision governs, this result's own latest decision
+        (``own_decision``). It is ``None`` when nothing is signed off, and for
+        a step whose job's sign-offs could not be read, since the job's
+        decision would govern. No API key needed. The note, the
         approver key and the signatures are not served; ``verdifax-verify
         --signoff`` checks them from the account's sign-off records."""
         if not token:
@@ -1456,7 +1462,12 @@ class VerdifaxClient:
         """The account's whole chain of sign-offs, oldest first.
 
         Calls ``GET /account/signoffs/history``, which needs the owner key,
-        and returns the list as the server sent it. Save it with
+        and returns the list as the server sent it: sign-offs, with restore
+        gaps and interrupted records in the places they close, and last the
+        chain's head statement (``verdifax.signoff-head.v1``), anchored on the
+        public log, whenever the chain holds a place. If the head could not be
+        anchored it is left out, and ``verdifax-verify`` then cannot call the
+        history complete. Save it with
         ``json.dump`` and check it with ``verdifax-verify --signoff-history FILE``.
 
         Raises:

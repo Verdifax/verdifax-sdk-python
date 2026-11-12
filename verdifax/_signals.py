@@ -587,16 +587,20 @@ __all__ = [
 def pending_signoffs(events: Iterable[Mapping[str, Any]]) -> list[int]:
     """The runs among ``events`` whose allowing policy rule requires a person's
     sign-off (their ``run.sealed`` entry says ``signoff_required``) and on
-    whose record no approval is in force: the last sign-off recorded on the
-    record, if any, is not an approval. Pass the account's feed from its
-    start, or a page that includes each run's sign-offs, so a sign-off
-    recorded later is seen (round 58, B7). Returned in feed order.
+    whose record no approval is in force. The decision in force is read as
+    ``verdifax-verify`` reads it: the last job sign-off on the run governs
+    when there is one, and otherwise the last record sign-off; a receipt
+    sign-off does not name a record (round 59, N15 and N19). Pass the
+    account's feed from its start, or a page that includes each run's
+    sign-offs, so a sign-off recorded later is seen (round 58, B7). Returned
+    in feed order.
 
     Raises ``VerdifaxError`` for a ``run.sealed`` entry that names no run.
     """
     order: list[int] = []
     required: set[int] = set()
-    latest: dict[int, Any] = {}
+    latest_job: dict[int, Any] = {}
+    latest_record: dict[int, Any] = {}
     for event in events:
         data = event.get("data") or {}
         entry = data.get("entry") or {}
@@ -613,10 +617,13 @@ def pending_signoffs(events: Iterable[Mapping[str, Any]]) -> list[int]:
         elif kind == "signoff.recorded":
             target = entry.get("target") or {}
             run = target.get("run_id")
-            if (
-                target.get("kind") == "record"
-                and isinstance(run, int)
-                and not isinstance(run, bool)
-            ):
-                latest[run] = entry.get("decision")
-    return [run for run in order if latest.get(run) != "approve"]
+            if isinstance(run, int) and not isinstance(run, bool):
+                if target.get("kind") == "job":
+                    latest_job[run] = entry.get("decision")
+                elif target.get("kind") == "record":
+                    latest_record[run] = entry.get("decision")
+
+    def in_force(run: int) -> Any:
+        return latest_job[run] if run in latest_job else latest_record.get(run)
+
+    return [run for run in order if in_force(run) != "approve"]

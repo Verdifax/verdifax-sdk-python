@@ -1123,17 +1123,27 @@ def test_the_readme_states_the_signal_feed_facts():
         assert f"`verdifax.{name}(" in section, name
 
 
-def test_the_changelog_opens_with_1_12_0_and_the_earlier_releases_follow():
+def test_the_changelog_opens_with_1_13_0_and_the_earlier_releases_follow():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     newest = changelog.split("\n## ", 2)[1]
+    assert newest.startswith("1.13.0\n")
+    for phrase in (
+        "pending_signoffs",
+        "signed_as",
+        "own_decision",
+        "verdifax.signoff-head.v1",
+        "v0.31.0",
+    ):
+        assert phrase in newest, phrase
+    newest = changelog.split("\n## ", 3)[2]
     assert newest.startswith("1.12.0\n")
     for phrase in ("data_quality", "pending_signoffs", "lenient", "fallback", "get_public_signoff"):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 3)[2]
+    newest = changelog.split("\n## ", 4)[3]
     assert newest.startswith("1.11.0\n")
     for phrase in ("chain.interrupted", "v0.29.0", "2^53"):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 4)[3]
+    newest = changelog.split("\n## ", 5)[4]
     assert newest.startswith("1.10.0\n")
     for phrase in (
         "run.sealed",
@@ -1144,21 +1154,21 @@ def test_the_changelog_opens_with_1_12_0_and_the_earlier_releases_follow():
         "v0.28.0",
     ):
         assert phrase in newest, phrase
-    entry = changelog.split("\n## ", 5)[4]
+    entry = changelog.split("\n## ", 6)[5]
     assert entry.startswith("1.9.0\n")
     assert "aivp_trace_text" in entry
-    entry = changelog.split("\n## ", 6)[5]
+    entry = changelog.split("\n## ", 7)[6]
     assert entry.startswith("1.8.0\n")
     assert "decided_by" in entry
-    entry = changelog.split("\n## ", 7)[6]
+    entry = changelog.split("\n## ", 8)[7]
     assert entry.startswith("1.7.0\n")
     assert "public_receipt_url" in entry
-    assert changelog.split("\n## ", 8)[7].startswith("1.6.1\n")
-    entry = changelog.split("\n## ", 9)[8]
+    assert changelog.split("\n## ", 9)[8].startswith("1.6.1\n")
+    entry = changelog.split("\n## ", 10)[9]
     assert entry.startswith("1.6.0\n")
     for phrase in ("publish_run", "unpublish_run", "run.published", "run.unpublished", "v0.24.0"):
         assert phrase in entry, phrase
-    entry = changelog.split("\n## ", 10)[9]
+    entry = changelog.split("\n## ", 11)[10]
     assert entry.startswith("1.5.0\n")
     for phrase in (
         "feed keys",
@@ -1207,3 +1217,29 @@ def test_pending_signoffs_lists_required_runs_without_an_approval_in_force():
 
     with pytest.raises(VerdifaxError):
         pending_signoffs([ev(1, "run.sealed", {})])
+
+
+def test_pending_signoffs_reads_a_job_signoff_as_the_verifier_does():
+    """Round 59, N15 and N19: a job sign-off on a run's record counts, and
+    the job's decision governs the record's own, as the verifier reads it."""
+    from verdifax import pending_signoffs
+
+    def ev(seq, kind, entry):
+        return {"id": f"account-7/{seq}", "data": {"kind": kind, "sequence": seq, "entry": entry}}
+
+    def sign_off(run, decision, kind):
+        return {"decision": decision, "target": {"kind": kind, "run_id": run}}
+
+    events = [
+        ev(1, "run.sealed", {"run_id": 20, "signoff_required": True}),
+        ev(2, "run.sealed", {"run_id": 21, "signoff_required": True}),
+        ev(3, "run.sealed", {"run_id": 22, "signoff_required": True}),
+        ev(4, "signoff.recorded", sign_off(20, "approve", "job")),
+        ev(5, "signoff.recorded", sign_off(21, "reject", "job")),
+        ev(6, "signoff.recorded", sign_off(21, "approve", "record")),
+        ev(7, "signoff.recorded", sign_off(22, "reject", "record")),
+        ev(8, "signoff.recorded", sign_off(22, "approve", "job")),
+    ]
+    # 20: approved by its job. 21: the job's rejection governs its own
+    # approval. 22: the job's approval governs its own rejection.
+    assert pending_signoffs(events) == [21]
