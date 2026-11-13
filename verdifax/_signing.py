@@ -481,14 +481,18 @@ def policy_activation_approval(
 
 
 def request_key_rotation_body(
-    current: "Optional[Ed25519PrivateKey]", new: "Ed25519PrivateKey"
+    current: "Optional[Ed25519PrivateKey]",
+    new: "Ed25519PrivateKey",
+    method: str = "rotate_request_key",
 ) -> dict[str, Any]:
     """The body of ``POST /keys/request-key`` that replaces a registered key.
 
-    ``proof`` is by the new key and ``change`` by the current one.
+    ``POST /account/request-key`` takes the same body. ``proof`` is by the
+    new key and ``change`` by the current one. ``method`` names the caller
+    in the error.
     """
     if current is None:
-        raise ValidationError("rotate_request_key needs a client with a signing_key")
+        raise ValidationError(f"{method} needs a client with a signing_key")
     body: dict[str, Any] = dict(request_key_body(new))
     body["change"] = request_key_change(current, body["public_key"])
     return body

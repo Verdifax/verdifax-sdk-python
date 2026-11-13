@@ -6,7 +6,7 @@ import base64
 import json
 import re
 from urllib.parse import quote
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Mapping, NotRequired, Optional, Sequence, TypedDict, Union
 
 import httpx
 
@@ -715,14 +715,149 @@ def run_deletion_answer(
     ``owner`` and the owner's signature that was sent.
 
     Raises:
-        VerdifaxError: If the answer has no ``run_deletion`` record, or the
-            record does not carry what was sent.
+        VerdifaxError: If the answer has no ``run_deletion`` record, the
+            record is not a tombstone (:func:`run_deletion`), or it does not
+            carry what was sent.
     """
     record = response_body.get("run_deletion") if isinstance(response_body, dict) else None
     if not isinstance(record, Mapping):
         raise VerdifaxError("the server's answer has no run_deletion record")
     expected = {"run_id": run_id, "record_hash": sent["record_hash"]}
     _check_owner_record(record, sent, key, "run deletion record", expected)
+    run_deletion(record, "the server's answer")
+    result: dict[str, Any] = response_body
+    return result
+
+
+class DeletedJobLinks(TypedDict, total=False):
+    """A deleted job step's own job links, in its tombstone's ``job_links``.
+
+    The records it followed (``previous_record_hashes``, at most 64), its
+    links to other accounts' records (``external_previous``, at most 16),
+    each sorted with no repeats, and whether it closed the job (``final``).
+    Each is left out when empty or false.
+    """
+
+    previous_record_hashes: list[str]
+    external_previous: list[str]
+    final: bool
+
+
+# The limits of a job step's links (the orchestrator's MaxJobPrevious and
+# MaxJobExternal).
+_JOB_LINK_LISTS = (("previous_record_hashes", 64), ("external_previous", 16))
+_HASH64 = re.compile(r"[0-9a-f]{64}")
+
+
+class RunDeletion(TypedDict):
+    """A run-deletion tombstone, ``verdifax.run-deletion.v1``, as the server sent it.
+
+    ``delete_run`` and ``admin_delete_run`` return it as ``run_deletion``,
+    and a feed event whose entry was the deleted record carries it as
+    ``data["deleted"]``, with ``entry`` ``None``. ``log_entries`` are the deleted record's public-log
+    entries, decimal strings in ascending order. ``job_links``, on a job
+    step deleted since round 61, holds the step's own job links, so its job
+    stays checkable through the tombstone; it is present, possibly empty,
+    on every such step, and absent on older tombstones and records outside
+    a job. A plain ``dict`` at run time, so saving it keeps every field as
+    sent.
+    """
+
+    format: str
+    decided_by: str
+    run_id: int
+    record_hash: str
+    job_id: NotRequired[str]
+    step_id: NotRequired[str]
+    job_links: NotRequired[DeletedJobLinks]
+    log_entries: NotRequired[list[str]]
+    changed_at: str
+    owner_signature: NotRequired[dict[str, str]]
+    signal: dict[str, Any]
+    deletion_hash: str
+    anchor: NotRequired[dict[str, Any]]
+
+
+def run_deletion(record: Any, source: str) -> RunDeletion:
+    """Check the shape of a run-deletion tombstone, and return it as sent.
+
+    A tombstone is the ``run_deletion`` of :meth:`VerdifaxClient.delete_run`
+    and the ``data["deleted"]`` of a feed event whose entry was the deleted
+    record. Its
+    ``log_entries``, when present, are the deleted record's public-log
+    entries: decimal entry numbers in ascending order, as strings so no
+    number is rounded. Makes no request.
+
+    ``job_links``, when present, must be a deleted job step's links
+    (:class:`DeletedJobLinks`).
+
+    Raises:
+        VerdifaxError: If it is not an object, its ``run_id`` is not a whole
+            number, its ``log_entries`` is not a list of strings, or its
+            ``job_links`` is not an object whose lists are sorted, distinct
+            64 lowercase hex hashes within their limits and whose ``final``
+            is a bool, or it carries ``job_links`` without a ``job_id``.
+    """
+    if not isinstance(record, dict):
+        raise VerdifaxError(f"{source} has a run deletion that is not an object")
+    run = record.get("run_id")
+    if run is not None and (isinstance(run, bool) or not isinstance(run, int)):
+        raise VerdifaxError(f"{source} has a run deletion whose run_id is not a whole number")
+    entries = record.get("log_entries")
+    if entries is not None and (
+        not isinstance(entries, list) or not all(isinstance(e, str) for e in entries)
+    ):
+        raise VerdifaxError(
+            f"{source} has a run deletion whose log_entries is not a list of strings"
+        )
+    if record.get("job_links") is not None:
+        if not record.get("job_id"):
+            raise VerdifaxError(
+                f"{source} has a run deletion with job_links but no job_id: only a job "
+                "step's tombstone carries job links"
+            )
+        _check_job_links(record["job_links"], source)
+    result: RunDeletion = record  # type: ignore[assignment]
+    return result
+
+
+def _check_job_links(links: Any, source: str) -> None:
+    """Check a tombstone's ``job_links`` as the orchestrator validates them."""
+    if not isinstance(links, dict):
+        raise VerdifaxError(f"{source} has a run deletion whose job_links is not an object")
+    for name, limit in _JOB_LINK_LISTS:
+        hashes = links.get(name)
+        if hashes is None:
+            continue
+        if not isinstance(hashes, list) or len(hashes) > limit:
+            raise VerdifaxError(
+                f"{source} has a run deletion whose job_links.{name} is not a list of at "
+                f"most {limit} hashes"
+            )
+        for index, value in enumerate(hashes):
+            if not isinstance(value, str) or not _HASH64.fullmatch(value):
+                raise VerdifaxError(
+                    f"{source} has a run deletion whose job_links.{name}[{index}] is not a "
+                    "64 character lowercase hex hash"
+                )
+            if index > 0 and hashes[index - 1] >= value:
+                raise VerdifaxError(
+                    f"{source} has a run deletion whose job_links.{name} is not sorted "
+                    "with no repeats"
+                )
+    final = links.get("final")
+    if final is not None and not isinstance(final, bool):
+        raise VerdifaxError(f"{source} has a run deletion whose job_links.final is not a bool")
+
+
+def admin_run_deletion_answer(response_body: Any) -> dict[str, Any]:
+    """The answer of ``POST /admin/runs/{run_id}/delete``, its tombstone's shape checked.
+
+    Raises:
+        VerdifaxError: If its ``run_deletion`` is not a tombstone.
+    """
+    if isinstance(response_body, dict) and response_body.get("run_deletion") is not None:
+        run_deletion(response_body["run_deletion"], "the server's answer")
     result: dict[str, Any] = response_body
     return result
 
@@ -826,6 +961,10 @@ def governed_text(response: Union[str, bytes]) -> str:
 
 __all__ = [
     "ACCOUNT_PATH",
+    "DeletedJobLinks",
+    "RunDeletion",
+    "admin_run_deletion_answer",
+    "run_deletion",
     "ACCOUNT_SETTING_CHANGES",
     "ACCOUNT_SETTING_VALUES",
     "ACCOUNT_SETTINGS_PATH",

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 from types import TracebackType
-from typing import Any, Generator, Mapping, NoReturn, Optional, Sequence, Type, Union
+from typing import Any, Callable, Mapping, NoReturn, Optional, Sequence, Type, Union
 from urllib.parse import quote
 
 import httpx
@@ -42,6 +42,7 @@ from ._requests import (
     admin_erase_body,
     admin_key_body,
     admin_owner_key_replacement_path,
+    admin_run_deletion_answer,
     admin_run_deletion_path,
     apply_policy_fields,
     attest_receipt,
@@ -73,12 +74,13 @@ from ._signals import (
     FEED_KEYS_PATH,
     FOLLOW_WAIT_DEFAULT,
     WEBHOOKS_PATH,
+    FeedHead,
+    SignalFollower,
     SignalsRequest,
     deliveries_request,
     failure_receipt_path,
     feed_key_body,
     feed_key_path,
-    follow,
     follow_request,
     signal_page,
     signals_path,
@@ -376,9 +378,19 @@ class VerdifaxClient:
         key. From then on the server refuses a run on this API key without a
         request signature.
 
+        For a key in a customer's account, the server seals the change in the
+        account's feed as an ``account.changed`` event, decided by the
+        account's side (``owner``), in one transaction with the change:
+        ``request_key.registered``, whose ``value`` is the public key. When
+        the record cannot be sealed, the change is not made.
+
         Raises:
             ValidationError: If this client has no ``signing_key``.
-            APIError: For a non-2xx response.
+            APIError: For a non-2xx response. A 409 means the key is an
+                approver key in the account, or another change to the API
+                key's request key came first ("the request key changed since
+                this change was signed"); the message is the server's, and the
+                call is not retried.
             ConnectionError: If the API was unreachable.
         """
         body = request_key_body(self._signing_key)
@@ -395,18 +407,38 @@ class VerdifaxClient:
         this client's current key. After success this client signs with the
         new key. After a failure it keeps the current one.
 
+        For a key in a customer's account, the server seals the change in the
+        account's feed as an ``account.changed`` event, decided by the
+        account's side (``owner``), in one transaction with the change:
+        ``request_key.rotated``, whose ``value`` is the new public key and
+        whose ``request_key_approval`` is the current key's approval this
+        client sent (``public_key``, ``signature``, ``signed_at``,
+        ``nonce``). When the record cannot be sealed, the change is not made.
+
         Args:
             new_signing_key: 32 raw bytes of the new Ed25519 private key.
 
         Raises:
             ValidationError: If this client has no ``signing_key``, or the
                 new key is not 32 raw bytes.
-            APIError: For a non-2xx response.
+            APIError: For a non-2xx response. A 409 means another change to
+                the request key came first ("the request key changed since
+                this change was signed"): the message is the server's, the
+                call is not retried, and this client keeps its current key.
             ConnectionError: If the API was unreachable.
         """
+        return self._rotate_request_key(REQUEST_KEY_PATH, new_signing_key, "rotate_request_key")
+
+    def _rotate_request_key(self, path: str, new_signing_key: bytes, method: str) -> dict[str, Any]:
+        """Send a rotation to ``path`` and switch to the new key only after a 2xx.
+
+        Shared by :meth:`rotate_request_key` and
+        :meth:`rotate_account_request_key`: the new key's proof, and the
+        current key's approval of the change.
+        """
         new_key = load_signing_key(new_signing_key)
-        body = request_key_rotation_body(self._signing_key, new_key)
-        result = self._send_json("POST", REQUEST_KEY_PATH, body)
+        body = request_key_rotation_body(self._signing_key, new_key, method)
+        result = self._send_json("POST", path, body)
         self._signing_key = new_key
         return result
 
@@ -417,6 +449,22 @@ class VerdifaxClient:
         server requires. After success this client drops its signing key and
         sends unsigned requests, because the server refuses a signature on an
         API key with no registered key. After a failure it keeps the key.
+
+        For a key in a customer's account, the server seals the change in the
+        account's feed as an ``account.changed`` event, decided by the
+        account's side (``owner``), in one transaction with the change:
+        ``request_key.cleared`` with an empty ``value`` and the current key's
+        ``request_key_approval``. A clear by Verdifax
+        (:meth:`admin_clear_request_key`) is decided by ``verdifax_admin`` and
+        carries no approval. When the record cannot be sealed, the change is
+        not made.
+
+        Raises:
+            APIError: For a non-2xx response. A 409 means another change to
+                the request key came first ("the request key changed since
+                this change was signed"): the message is the server's, the
+                call is not retried, and this client keeps its key.
+            ConnectionError: If the API was unreachable.
         """
         result = self._send_json(
             "DELETE", REQUEST_KEY_PATH, request_key_clear_body(self._signing_key)
@@ -1154,15 +1202,48 @@ class VerdifaxClient:
 
         Sends ``POST /account/request-key`` with the same body as
         :meth:`register_request_key`. The owner key's request key signs every
-        change to the account's policy.
+        change to the account's policy. The registration is sealed in the
+        account's feed as ``request_key.registered``, as
+        :meth:`register_request_key` describes.
 
         Raises:
             ValidationError: If this client has no ``signing_key``.
-            APIError: For a non-2xx response.
+            APIError: For a non-2xx response. A 409 means another change to
+                the owner key's request key came first ("the request key
+                changed since this change was signed"), with the server's
+                message; it is not retried.
             ConnectionError: If the API was unreachable.
         """
         body = request_key_body(self._signing_key, "register_account_request_key")
         return self._send_json("POST", ACCOUNT_REQUEST_KEY_PATH, body)
+
+    def rotate_account_request_key(self, new_signing_key: bytes) -> dict[str, Any]:
+        """Replace the owner key's request key with ``POST /account/request-key``.
+
+        Works as :meth:`rotate_request_key`, on the owner key's route: it
+        sends the new public key with its proof and an approval signed by
+        this client's current key. After success this client signs with the
+        new key, so later owner changes are signed with it; after a failure
+        it keeps the current one. The rotation is sealed in the account's
+        feed as ``request_key.rotated``, with the approval this client sent,
+        so a verifier follows the owner key's request-key chain.
+
+        Args:
+            new_signing_key: 32 raw bytes of the new Ed25519 private key.
+
+        Raises:
+            ValidationError: If this client has no ``signing_key``, or the
+                new key is not 32 raw bytes, before anything is sent.
+            APIError: For a non-2xx response. A 409 means another change to
+                the owner key's request key came first ("the request key
+                changed since this change was signed"): the message is the
+                server's, the call is not retried, and this client keeps its
+                current key.
+            ConnectionError: If the API was unreachable.
+        """
+        return self._rotate_request_key(
+            ACCOUNT_REQUEST_KEY_PATH, new_signing_key, "rotate_account_request_key"
+        )
 
     def clear_account_request_key(self) -> dict[str, Any]:
         """Clear the owner key's request key with ``DELETE /account/request-key``.
@@ -1170,7 +1251,14 @@ class VerdifaxClient:
         Works as :meth:`clear_request_key`: with a ``signing_key`` the current
         key approves the clear, and after success this client drops its
         signing key. Until another request key is registered, the account's
-        policy cannot be changed.
+        policy cannot be changed. The clear is sealed in the account's feed
+        as ``request_key.cleared``, with the current key's approval.
+
+        Raises:
+            APIError: For a non-2xx response. A 409 means another change to
+                the owner key's request key came first, with the server's
+                message; it is not retried, and this client keeps its key.
+            ConnectionError: If the API was unreachable.
         """
         result = self._send_json(
             "DELETE", ACCOUNT_REQUEST_KEY_PATH, request_key_clear_body(self._signing_key)
@@ -1633,12 +1721,20 @@ class VerdifaxClient:
 
         Returns:
             The page: ``events``, ``next_after`` (pass it as ``after`` next)
-            and ``newest``, the account's newest sequence.
+            and ``newest``, the account's newest sequence. A page that
+            reaches the feed's end also carries ``head``, the feed's head
+            statement (``verdifax.feed-head.v1``): the account, the feed's
+            highest event (``sequence``) and that event's hash
+            (``head_hash``), ``stated_at``, ``head_statement_hash`` and its
+            public-log ``anchor``. It is not an event. A page whose head
+            could not be made carries none.
 
         Raises:
             ValidationError: For a bad ``after``, ``limit``, ``wait`` or
                 ``as_owner``, before anything is sent.
-            VerdifaxError: If the answer is not a feed page.
+            VerdifaxError: If the answer is not a feed page, or its
+                ``head`` is malformed or states another end than the page
+                reaches.
             APIError: For a non-2xx response, for example 429 for a key
                 that already holds two waits open.
             ConnectionError: If the API was unreachable.
@@ -1646,29 +1742,65 @@ class VerdifaxClient:
         return self._read_signals(signals_request(after, limit, wait, as_owner, self.timeout))
 
     def follow_signals(
-        self, after: int = 0, wait: int = FOLLOW_WAIT_DEFAULT, as_owner: bool = False
-    ) -> Generator[dict[str, Any], None, None]:
+        self,
+        after: int = 0,
+        wait: int = FOLLOW_WAIT_DEFAULT,
+        as_owner: bool = False,
+        on_head: Optional[Callable[[FeedHead], None]] = None,
+        after_event_hash: Optional[str] = None,
+    ) -> SignalFollower:
         """Follow the account's feed from ``after``, yielding each event in order.
 
         Reads page after page with :meth:`get_signals`, going on from each
         page's ``next_after``, so no event is skipped or repeated, and waits
         up to ``wait`` seconds on the server when there is nothing new. A
         failed read is retried with the client's normal retry policy. Stop by
-        leaving the loop. The arguments are checked when this is called,
-        before anything is sent.
+        leaving the loop, or with ``close()``. The arguments are checked when
+        this is called, before anything is sent.
+
+        A page's head statement is never yielded as an event. A head is kept
+        only once every event on its page has been handled (the loop asked
+        for the item after the page's last event), only when its
+        ``sequence`` is the page's ``next_after`` and its ``head_hash`` is the
+        ``event_hash`` of the last event handled, and only when it is a
+        newer statement than the head already kept; a head repeated on idle
+        reads is not kept again. The returned
+        :class:`~verdifax.SignalFollower` holds the kept head in ``head``
+        (``None`` until one is kept), also after the loop stops, and passes
+        each newly kept head to ``on_head``. An error raised while following
+        carries it as ``head``.
+
+        Args:
+            after: The last sequence already read; 0 reads from the start.
+            wait: Seconds each read waits for a new event, 0 to 25.
+            as_owner: Use the owner key's route.
+            on_head: Called with each newly kept head, or ``None``.
+            after_event_hash: The ``event_hash`` of event ``after``, as you
+                saved it with that sequence, or ``None``. Until an event is
+                handled in this call it stands for the last event handled,
+                so a follower resuming at the feed's end keeps the head it
+                is served; without it, no head is kept until an event is
+                handled. 64 lowercase hex characters; ``None`` or empty
+                gives none, and anything else raises ``ValidationError``
+                before anything is sent.
 
         Raises:
-            ValidationError: For a bad ``after``, ``wait`` or ``as_owner``.
+            ValidationError: For a bad ``after``, ``wait``, ``as_owner``,
+                ``on_head`` or ``after_event_hash``.
             VerdifaxError: Any error a read raises, or a page that would
                 skip or repeat an event, with ``last_sequence`` set to the
-                last sequence read: pass it as ``after`` to go on.
+                last sequence read (pass it as ``after`` to go on) and
+                ``head`` to the head kept.
         """
-        follow_request(after, wait, as_owner)
+        follow_request(after, wait, as_owner, on_head, after_event_hash)
 
         def read_page(place: int) -> dict[str, Any]:
             return self._read_signals(signals_request(place, None, wait, as_owner, self.timeout))
 
-        return follow(read_page, after, wait, f"GET {signals_path(as_owner)}")
+        source = f"GET {signals_path(as_owner)}"
+        return SignalFollower(
+            read_page, after, wait, source, on_head=on_head, after_event_hash=after_event_hash
+        )
 
     def create_feed_key(self, name: str, expires_at: Optional[str] = None) -> dict[str, Any]:
         """Create a feed key in the account with ``POST /account/feed-keys``.
@@ -1849,7 +1981,7 @@ class VerdifaxClient:
             ValidationError: If ``run_id`` is not a positive integer.
             APIError: For a non-2xx response. It is not retried.
         """
-        return self._send_json("POST", admin_run_deletion_path(run_id))
+        return admin_run_deletion_answer(self._send_json("POST", admin_run_deletion_path(run_id)))
 
     def admin_replace_owner_key(self, account_id: int) -> dict[str, Any]:
         """Start replacing a lost owner key with ``POST /admin/accounts/{id}/owner-key/replace``.

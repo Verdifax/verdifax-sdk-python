@@ -1,0 +1,398 @@
+{
+ "_comment": "Round 61 (R252): how every SDK's feed follower keeps the feed head. Each case is a run of the follower over pages served in order. A page has the event sequences it carries, its next_after and the head it ends with (null for none). handle_until is the last event the caller finishes before it stops following (null: it finishes every event). A head is kept only when its sequence equals its page's next_after and only after the caller finished every event on that page; a newer kept head is reported once; the same head statement (the same statement label, standing for the same head_statement_hash) is not reported again, while a fresh statement for the same sequence (the server makes one after its 5-minute reuse ends, with a later time) replaces the kept one and is reported; a lower or non-matching head is never kept. expected_kept is the head ({sequence, statement}) the caller can read at the end (null for none); expected_reported lists the heads reported to the caller, in order. The Go SDK (FollowSignalsOptions.OnHead, FollowSignalsError.Head) set this rule; every SDK and this file must agree. Each head is {sequence, statement}: statement is a label for the head's head_statement_hash; a test serves a head whose head_statement_hash is derived from the label (for example its SHA-256), so equal labels mean the same statement. Each event's event_hash is derived from its sequence (for example the SHA-256 of \"e\" followed by the sequence), and a head's head_hash is the event_hash of the event at its sequence unless the head names head_hash_of, the sequence whose event_hash it carries instead; a head is kept only when its head_hash equals the event_hash of the last event the caller finished (round 61: both reports proposed it, and the verifier already fails such a head). A case may name start: {after, after_hash_of}: the follower starts after that event, and when after_hash_of is given the caller passes the event_hash of event after_hash_of as the hash of the event it last finished (a follower resuming at the feed's end keeps the head it is served); with start null the follower starts at 0 having finished no event.",
+ "cases": [
+  {
+   "name": "a head matching a finished page is kept and reported",
+   "pages": [
+    {
+     "events": [
+      1,
+      2,
+      3
+     ],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": {
+    "sequence": 3,
+    "statement": "s3"
+   },
+   "expected_reported": [
+    {
+     "sequence": 3,
+     "statement": "s3"
+    }
+   ],
+   "start": null
+  },
+  {
+   "name": "a page without a head keeps nothing",
+   "pages": [
+    {
+     "events": [
+      1,
+      2
+     ],
+     "next_after": 2,
+     "head": null
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": null,
+   "expected_reported": [],
+   "start": null
+  },
+  {
+   "name": "a head that does not match the page's next_after is not kept",
+   "pages": [
+    {
+     "events": [
+      1,
+      2,
+      3
+     ],
+     "next_after": 3,
+     "head": {
+      "sequence": 5,
+      "statement": "s5"
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": null,
+   "expected_reported": [],
+   "start": null
+  },
+  {
+   "name": "a head on a page the caller did not finish is not kept",
+   "pages": [
+    {
+     "events": [
+      1,
+      2,
+      3
+     ],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    }
+   ],
+   "handle_until": 2,
+   "expected_kept": null,
+   "expected_reported": [],
+   "start": null
+  },
+  {
+   "name": "the same head on idle polls is reported once",
+   "pages": [
+    {
+     "events": [
+      1,
+      2,
+      3
+     ],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    },
+    {
+     "events": [],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    },
+    {
+     "events": [],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": {
+    "sequence": 3,
+    "statement": "s3"
+   },
+   "expected_reported": [
+    {
+     "sequence": 3,
+     "statement": "s3"
+    }
+   ],
+   "start": null
+  },
+  {
+   "name": "a newer head replaces the kept one and is reported",
+   "pages": [
+    {
+     "events": [
+      1,
+      2,
+      3
+     ],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    },
+    {
+     "events": [
+      4,
+      5,
+      6
+     ],
+     "next_after": 6,
+     "head": {
+      "sequence": 6,
+      "statement": "s6"
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": {
+    "sequence": 6,
+    "statement": "s6"
+   },
+   "expected_reported": [
+    {
+     "sequence": 3,
+     "statement": "s3"
+    },
+    {
+     "sequence": 6,
+     "statement": "s6"
+    }
+   ],
+   "start": null
+  },
+  {
+   "name": "a lower head never replaces the kept one",
+   "pages": [
+    {
+     "events": [
+      1,
+      2,
+      3,
+      4
+     ],
+     "next_after": 4,
+     "head": {
+      "sequence": 4,
+      "statement": "s4"
+     }
+    },
+    {
+     "events": [],
+     "next_after": 4,
+     "head": {
+      "sequence": 2,
+      "statement": "s2"
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": {
+    "sequence": 4,
+    "statement": "s4"
+   },
+   "expected_reported": [
+    {
+     "sequence": 4,
+     "statement": "s4"
+    }
+   ],
+   "start": null
+  },
+  {
+   "name": "a page that is not the end carries no head, and the head at the end is kept",
+   "pages": [
+    {
+     "events": [
+      1,
+      2
+     ],
+     "next_after": 2,
+     "head": null
+    },
+    {
+     "events": [
+      3,
+      4
+     ],
+     "next_after": 4,
+     "head": {
+      "sequence": 4,
+      "statement": "s4"
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": {
+    "sequence": 4,
+    "statement": "s4"
+   },
+   "expected_reported": [
+    {
+     "sequence": 4,
+     "statement": "s4"
+    }
+   ],
+   "start": null
+  },
+  {
+   "name": "a fresh statement for the same sequence replaces the kept one and is reported",
+   "pages": [
+    {
+     "events": [
+      1,
+      2,
+      3
+     ],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    },
+    {
+     "events": [],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    },
+    {
+     "events": [],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3-later"
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": {
+    "sequence": 3,
+    "statement": "s3-later"
+   },
+   "expected_reported": [
+    {
+     "sequence": 3,
+     "statement": "s3"
+    },
+    {
+     "sequence": 3,
+     "statement": "s3-later"
+    }
+   ],
+   "start": null
+  },
+  {
+   "name": "a head naming another event's hash is not kept",
+   "pages": [
+    {
+     "events": [
+      1,
+      2,
+      3
+     ],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3-wrong",
+      "head_hash_of": 2
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": null,
+   "expected_reported": [],
+   "start": null
+  },
+  {
+   "name": "a head with the right hash but another sequence is not kept",
+   "start": null,
+   "pages": [
+    {
+     "events": [
+      1,
+      2,
+      3
+     ],
+     "next_after": 3,
+     "head": {
+      "sequence": 5,
+      "statement": "s5",
+      "head_hash_of": 3
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": null,
+   "expected_reported": []
+  },
+  {
+   "name": "a follower resuming at the end with the hash of its last event keeps the head",
+   "start": {
+    "after": 3,
+    "after_hash_of": 3
+   },
+   "pages": [
+    {
+     "events": [],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": {
+    "sequence": 3,
+    "statement": "s3"
+   },
+   "expected_reported": [
+    {
+     "sequence": 3,
+     "statement": "s3"
+    }
+   ]
+  },
+  {
+   "name": "a follower resuming at the end without that hash keeps no head",
+   "start": {
+    "after": 3,
+    "after_hash_of": null
+   },
+   "pages": [
+    {
+     "events": [],
+     "next_after": 3,
+     "head": {
+      "sequence": 3,
+      "statement": "s3"
+     }
+    }
+   ],
+   "handle_until": null,
+   "expected_kept": null,
+   "expected_reported": []
+  }
+ ]
+}

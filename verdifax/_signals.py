@@ -8,7 +8,10 @@ hash of the event before it, its own hash and the sealed entry it names. The
 feed cannot show a signal Verdifax never recorded.
 
 A feed key reads the feed, ``GET /signals``, and nothing else. The owner key
-reads the same feed at ``GET /account/signals``. A webhook delivery is a
+reads the same feed at ``GET /account/signals``. A page that reaches the
+feed's end ends with the feed's head statement, ``verdifax.feed-head.v1``:
+the feed's highest event and that event's hash, anchored on the public log,
+so a saved feed shows it was complete as of that entry's time. A webhook delivery is a
 copy of one event, signed under the Standard Webhooks scheme; the pull feed
 and the public log are the record. This module makes no request itself: it
 checks arguments, builds paths and bodies, reads pages, and checks webhook
@@ -23,7 +26,9 @@ import binascii
 import hashlib
 import hmac
 import json
+import re
 import time
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
@@ -34,13 +39,15 @@ from typing import (
     Generator,
     Iterable,
     Mapping,
+    NotRequired,
     Optional,
+    TypedDict,
     Union,
 )
 
-from ._requests import account_key_body
+from ._requests import RunDeletion, account_key_body, run_deletion
 from ._signoffs import _text
-from ._validation import validate_positive_id
+from ._validation import validate_hex64, validate_positive_id
 from .exceptions import ValidationError, VerdifaxError, WebhookVerificationError
 
 SIGNAL_FORM = "verdifax.signal.v1"
@@ -73,6 +80,30 @@ SIGNAL_KINDS = (
     # the tombstone stays in the feed.
     "run.deleted",
 )
+# The statement a page that reaches the feed's end carries in ``head``.
+FEED_HEAD_FORM = "verdifax.feed-head.v1"
+
+
+class FeedHead(TypedDict):
+    """A feed page's ``head``, ``verdifax.feed-head.v1``, as the server sent it.
+
+    Verdifax's statement, at ``stated_at``, of the feed's highest event
+    (``sequence``) and that event's hash (``head_hash``), anchored on the
+    public log as its own entry (``anchor``, absent while unanchored). A
+    plain ``dict`` at run time, so saving it keeps every field as sent.
+    """
+
+    format: str
+    account: str
+    sequence: int
+    head_hash: str
+    stated_at: str
+    head_statement_hash: str
+    anchor: NotRequired[dict[str, Any]]
+
+
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+_ACCOUNT_LABEL = re.compile(r"account-[1-9][0-9]*")
 SIGNALS_PATH = "/signals"
 ACCOUNT_SIGNALS_PATH = "/account/signals"
 FEED_KEYS_PATH = "/account/feed-keys"
@@ -170,21 +201,42 @@ def signals_request(
     return SignalsRequest(path, params, signals_timeout(client_timeout, seconds), place, seconds)
 
 
-def follow_request(after: Any = 0, wait: Any = FOLLOW_WAIT_DEFAULT, as_owner: Any = False) -> None:
+def follow_request(
+    after: Any = 0,
+    wait: Any = FOLLOW_WAIT_DEFAULT,
+    as_owner: Any = False,
+    on_head: Any = None,
+    after_event_hash: Any = None,
+) -> None:
     """Check the arguments of ``follow_signals`` before anything is sent.
 
     Raises:
-        ValidationError: As :func:`signals_request` does.
+        ValidationError: As :func:`signals_request` does, if ``on_head`` is
+            neither ``None`` nor callable, or if ``after_event_hash`` is
+            neither ``None``, empty, nor 64 lowercase hex characters.
     """
+    if after_event_hash is not None and after_event_hash != "":
+        validate_hex64(after_event_hash, "after_event_hash")
     signals_request(after, None, wait, as_owner)
+    if on_head is not None and not callable(on_head):
+        raise ValidationError(f"on_head must be a function or None, got {type(on_head).__name__}")
 
 
 def signal_page(body: Any, source: str) -> dict[str, Any]:
     """Read one page of the feed, as the server sent it.
 
+    A page that reaches the feed's end may carry ``head``, the feed's head
+    statement (``verdifax.feed-head.v1``), read beside the events, never as
+    one. An event whose entry is a record that was since deleted (for
+    example a refused run's receipt event) carries ``entry`` ``None`` and
+    the record's tombstone in ``data["deleted"]``; an event that is its own
+    sealed record, such as ``run.sealed``, keeps its own entry. The page is
+    returned as the server sent it.
+
     Raises:
-        VerdifaxError: If the page has no ``events`` list, or ``next_after``
-            or ``newest`` is not a whole number.
+        VerdifaxError: If the page has no ``events`` list, ``next_after``
+            or ``newest`` is not a whole number, its ``head`` is not a feed
+            head, or an event's ``deleted`` is not a run-deletion tombstone.
     """
     if not isinstance(body, dict):
         raise VerdifaxError(f"{source} did not return an object")
@@ -194,7 +246,56 @@ def signal_page(body: Any, source: str) -> dict[str, Any]:
         value = body.get(name)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise VerdifaxError(f"{source} returned no usable {name}")
+    for event in body["events"]:
+        data = event.get("data") if isinstance(event, Mapping) else None
+        if isinstance(data, Mapping) and data.get("deleted") is not None:
+            run_deletion(data["deleted"], f"{source} event {data.get('sequence')}")
+    if body.get("head") is not None:
+        feed_head(body, source)
     return body
+
+
+def feed_head(page: Mapping[str, Any], source: str) -> FeedHead:
+    """Check the shape of the head statement a feed page ends with, and return it.
+
+    The head is Verdifax's statement of the feed at ``stated_at``: its
+    ``account``, its highest event (``sequence``) and that event's hash
+    (``head_hash``), with ``head_statement_hash`` and its public-log
+    ``anchor``. The server sends one only on a page that reaches the feed's
+    end. ``verdifax-verify --signals`` checks the statement against the feed
+    and its anchor. Makes no request.
+
+    Raises:
+        VerdifaxError: If a field is missing or malformed.
+    """
+    head = page.get("head")
+    if not isinstance(head, dict):
+        raise VerdifaxError(f"{source} returned a head that is not an object")
+    if head.get("format") != FEED_HEAD_FORM:
+        raise VerdifaxError(f"{source} returned a head that is not {FEED_HEAD_FORM}")
+    account = head.get("account")
+    if not isinstance(account, str) or not _ACCOUNT_LABEL.fullmatch(account):
+        raise VerdifaxError(f"{source} returned a head with no usable account")
+    sequence = head.get("sequence")
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0:
+        raise VerdifaxError(f"{source} returned a head with no usable sequence")
+    for name in ("head_hash", "head_statement_hash"):
+        value = head.get(name)
+        if not isinstance(value, str) or not _HEX64.fullmatch(value):
+            raise VerdifaxError(f"{source} returned a head with no usable {name}")
+    stated_at = head.get("stated_at")
+    if not isinstance(stated_at, str) or not stated_at:
+        raise VerdifaxError(f"{source} returned a head with no usable stated_at")
+    if head.get("anchor") is not None and not isinstance(head.get("anchor"), dict):
+        raise VerdifaxError(f"{source} returned a head whose anchor is not an object")
+    result: FeedHead = head  # type: ignore[assignment]
+    return result
+
+
+def _event_hash(event: Any) -> Optional[str]:
+    data = event.get("data") if isinstance(event, Mapping) else None
+    value = data.get("event_hash") if isinstance(data, Mapping) else None
+    return value if isinstance(value, str) else None
 
 
 def _event_sequence(event: Any) -> Optional[int]:
@@ -233,10 +334,44 @@ def next_place(page: Mapping[str, Any], after: int, source: str) -> int:
     return place
 
 
-def with_place(exc: VerdifaxError, after: int) -> VerdifaxError:
-    """Mark an error from ``follow_signals`` with the last sequence read."""
+def with_place(
+    exc: VerdifaxError,
+    after: int,
+    head: Optional[FeedHead] = None,
+    after_event_hash: Optional[str] = None,
+) -> VerdifaxError:
+    """Mark an error from ``follow_signals`` with where to resume.
+
+    ``last_sequence`` is the last sequence read, ``after_event_hash`` the
+    ``event_hash`` of the last event finished (or the one the caller gave,
+    before any), and ``head`` the head kept.
+    """
     exc.last_sequence = after
+    exc.head = head
+    exc.after_event_hash = after_event_hash
     return exc
+
+
+def newer_head(
+    kept: Optional[Mapping[str, Any]], head: Any, handled: int, handled_hash: Optional[str]
+) -> bool:
+    """Whether ``head``, a page's head, is one to keep over ``kept``.
+
+    It states the feed through ``handled``, the page's ``next_after``, its
+    ``head_hash`` is ``handled_hash``, the ``event_hash`` of the last event
+    the caller handled (so with no event handled yet, no head is kept), and
+    it is another statement than ``kept``, at ``kept``'s event or later. A
+    head repeated on idle reads is not kept again. The rule all four SDKs
+    share (``tests/sdk-feed-head-vector.json``).
+    """
+    if not isinstance(head, Mapping) or head.get("sequence") != handled:
+        return False
+    if handled_hash is None or head.get("head_hash") != handled_hash:
+        return False
+    return kept is None or (
+        head["sequence"] >= kept["sequence"]
+        and head.get("head_statement_hash") != kept.get("head_statement_hash")
+    )
 
 
 def follow(
@@ -245,25 +380,48 @@ def follow(
     wait: int,
     source: str,
     sleep: Optional[Callable[[float], None]] = None,
+    on_head: Optional[Callable[[FeedHead], None]] = None,
+    after_event_hash: Optional[str] = None,
 ) -> Generator[dict[str, Any], None, None]:
     """Read page after page from ``after``, yielding each event, until the caller stops.
 
     ``read_page(after)`` reads one page with the client's own retry policy.
     An error it raises, or a page that would skip or repeat an event, is
-    raised with ``last_sequence`` set to the last sequence read. After an
-    empty page read with ``wait=0`` it pauses one second before the next.
+    raised with ``last_sequence`` set to the last sequence read,
+    ``after_event_hash`` to the ``event_hash`` of the last event finished
+    and ``head`` to the head kept. After an empty page read with ``wait=0`` it
+    pauses one second before the next.
+
+    A page's ``head`` is never yielded. It is kept, and passed to
+    ``on_head``, only once the caller has handled every event on the page
+    (asked for the item after its last one), only when it states the feed
+    through the page's ``next_after`` with the ``event_hash`` of the last
+    event handled as its ``head_hash``, and only when it is a newer
+    statement than the head already kept (:func:`newer_head`). Before the
+    caller finishes an event, the last event handled is event ``after``,
+    whose hash is ``after_event_hash`` when the caller gives it, so a
+    follower resuming at the feed's end keeps the head it is served.
     """
     place = after
+    kept: Optional[FeedHead] = None
+    # The event hash of the last event the caller finished, or, before the
+    # first, of event ``after`` as the caller saved it.
+    handled_hash: Optional[str] = after_event_hash or None
     while True:
         try:
             page = read_page(place)
             events = list(page["events"])
             following = next_place(page, place, source)
         except VerdifaxError as exc:
-            raise with_place(exc, place)
+            raise with_place(exc, place, kept, handled_hash)
         for event in events:
             yield event
+            handled_hash = _event_hash(event)
         place = following
+        if newer_head(kept, page.get("head"), following, handled_hash):
+            kept = page["head"]
+            if on_head is not None:
+                on_head(kept)
         if not events and wait == 0:
             (sleep or time.sleep)(FOLLOW_IDLE_PAUSE)
 
@@ -274,21 +432,118 @@ async def follow_async(
     wait: int,
     source: str,
     sleep: Optional[Callable[[float], Awaitable[None]]] = None,
+    on_head: Optional[Callable[[FeedHead], None]] = None,
+    after_event_hash: Optional[str] = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """The async form of :func:`follow`."""
     place = after
+    kept: Optional[FeedHead] = None
+    # The event hash of the last event the caller finished, or, before the
+    # first, of event ``after`` as the caller saved it.
+    handled_hash: Optional[str] = after_event_hash or None
     while True:
         try:
             page = await read_page(place)
             events = list(page["events"])
             following = next_place(page, place, source)
         except VerdifaxError as exc:
-            raise with_place(exc, place)
+            raise with_place(exc, place, kept, handled_hash)
         for event in events:
             yield event
+            handled_hash = _event_hash(event)
         place = following
+        if newer_head(kept, page.get("head"), following, handled_hash):
+            kept = page["head"]
+            if on_head is not None:
+                on_head(kept)
         if not events and wait == 0:
             await (sleep or asyncio.sleep)(FOLLOW_IDLE_PAUSE)
+
+
+class SignalFollower(Iterator[dict[str, Any]]):
+    """What ``follow_signals`` returns: the feed's events in order, and its newest head.
+
+    Iterate it as a generator; stop by leaving the loop, or with
+    :meth:`close`. A page's head statement is never yielded as an event.
+    ``head`` is the newest head kept so far, or ``None``: a head is kept
+    once every event on its page has been handled (the loop asked for the
+    item after the page's last event), when it states the feed through that
+    page's last event and its ``head_hash`` is the ``event_hash`` of the last
+    event handled, and when it is a newer statement than the one kept.
+    It stays readable after the loop stops, and an error raised while
+    following carries it too, as ``head``. Save it with the events:
+    ``verdifax-verify --signals`` checks the feed against it.
+    """
+
+    def __init__(
+        self,
+        read_page: Callable[[int], dict[str, Any]],
+        after: int,
+        wait: int,
+        source: str,
+        sleep: Optional[Callable[[float], None]] = None,
+        on_head: Optional[Callable[[FeedHead], None]] = None,
+        after_event_hash: Optional[str] = None,
+    ) -> None:
+        self.head: Optional[FeedHead] = None
+        self._on_head = on_head
+        self._events = follow(
+            read_page, after, wait, source, sleep, self._keep_head, after_event_hash
+        )
+
+    def _keep_head(self, head: FeedHead) -> None:
+        self.head = head
+        if self._on_head is not None:
+            self._on_head(head)
+
+    def __iter__(self) -> "SignalFollower":
+        return self
+
+    def __next__(self) -> dict[str, Any]:
+        return next(self._events)
+
+    def close(self) -> None:
+        """Stop following. Nothing more is sent."""
+        self._events.close()
+
+
+class AsyncSignalFollower(AsyncIterator[dict[str, Any]]):
+    """The async form of :class:`SignalFollower`, for ``async for``.
+
+    Stop by leaving the loop, or with :meth:`aclose`. ``head`` is the newest
+    head kept so far, or ``None``, kept by the same rule.
+    """
+
+    def __init__(
+        self,
+        read_page: Callable[[int], Awaitable[dict[str, Any]]],
+        after: int,
+        wait: int,
+        source: str,
+        sleep: Optional[Callable[[float], Awaitable[None]]] = None,
+        on_head: Optional[Callable[[FeedHead], None]] = None,
+        after_event_hash: Optional[str] = None,
+    ) -> None:
+        self.head: Optional[FeedHead] = None
+        self._on_head = on_head
+        self._events = follow_async(
+            read_page, after, wait, source, sleep, self._keep_head, after_event_hash
+        )
+
+    def _keep_head(self, head: FeedHead) -> None:
+        self.head = head
+        if self._on_head is not None:
+            self._on_head(head)
+
+    def __aiter__(self) -> "AsyncSignalFollower":
+        return self
+
+    async def __anext__(self) -> dict[str, Any]:
+        return await self._events.__anext__()
+
+    async def aclose(self) -> None:
+        """Stop following. Nothing more is sent."""
+        await self._events.aclose()
 
 
 def feed_key_body(name: Any, expires_at: Any = None) -> dict[str, str]:
@@ -555,8 +810,11 @@ def verify_webhook(
 
 __all__ = [
     "ACCOUNT_SIGNALS_PATH",
+    "AsyncSignalFollower",
     "DEFAULT_WEBHOOK_TOLERANCE",
+    "FEED_HEAD_FORM",
     "FEED_KEYS_PATH",
+    "FeedHead",
     "FOLLOW_IDLE_PAUSE",
     "FOLLOW_WAIT_DEFAULT",
     "SIGNALS_PATH",
@@ -566,17 +824,20 @@ __all__ = [
     "SIGNAL_TIMEOUT_MARGIN",
     "SIGNAL_TYPE_PREFIX",
     "SIGNAL_WAIT_MAX",
+    "SignalFollower",
     "SignalsRequest",
     "WEBHOOKS_PATH",
     "WEBHOOK_SECRET_PREFIX",
     "WebhookVerificationError",
     "deliveries_request",
     "failure_receipt_path",
+    "feed_head",
     "feed_key_body",
     "feed_key_path",
     "follow",
     "follow_async",
     "follow_request",
+    "newer_head",
     "next_place",
     "signal_event_hash",
     "signal_page",
@@ -604,7 +865,9 @@ def pending_signoffs(events: Iterable[Mapping[str, Any]]) -> list[int]:
     nothing left to sign off. Returned in feed order.
 
     Raises ``VerdifaxError`` for a ``run.sealed`` or ``run.deleted`` entry
-    that names no run.
+    that names no run: a null entry, or a ``run_id`` that is not a positive
+    whole number. The shared vector ``tests/sdk-pending-signoffs-vector.json``
+    fixes these answers for all four SDKs.
     """
     order: list[int] = []
     required: set[int] = set()
@@ -617,7 +880,7 @@ def pending_signoffs(events: Iterable[Mapping[str, Any]]) -> list[int]:
         kind = data.get("kind")
         if kind in ("run.sealed", "run.deleted"):
             run = entry.get("run_id")
-            if not isinstance(run, int) or isinstance(run, bool):
+            if not isinstance(run, int) or isinstance(run, bool) or run <= 0:
                 raise VerdifaxError(
                     f"verdifax: the {kind} entry of event {event.get('id')} names no run"
                 )

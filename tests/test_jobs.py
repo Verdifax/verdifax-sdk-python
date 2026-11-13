@@ -1060,20 +1060,20 @@ async def test_async_exports_send_job_id():
     assert [request.url.params["job_id"] for request in seen] == ["j", "j"]
 
 
-def test_version_is_1_8_0_in_the_package_and_the_user_agent():
-    assert __version__ == "1.14.0"
+def test_version_is_1_15_0_in_the_package_and_the_user_agent():
+    assert __version__ == "1.15.0"
     pyproject = (Path(__file__).parent.parent / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "1.14.0"' in pyproject
+    assert 'version = "1.15.0"' in pyproject
     seen: list[httpx.Request] = []
     sync_client(responder(seen), signing_key=None).health()
-    assert seen[0].headers["User-Agent"] == "verdifax-python/1.14.0"
+    assert seen[0].headers["User-Agent"] == "verdifax-python/1.15.0"
 
 
 async def test_async_user_agent_names_the_version():
     seen: list[httpx.Request] = []
     async with async_client(responder(seen), signing_key=None) as client:
         await client.health()
-    assert seen[0].headers["User-Agent"] == "verdifax-python/1.14.0 (async)"
+    assert seen[0].headers["User-Agent"] == "verdifax-python/1.15.0 (async)"
 
 
 def test_new_names_are_exported():

@@ -8,7 +8,7 @@ failure modes can catch the more specific subclasses below.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 
 class VerdifaxError(Exception):
@@ -18,9 +18,19 @@ class VerdifaxError(Exception):
         last_sequence: Set on an error ``follow_signals`` raises: the last
             sequence of the feed it read. Pass it as ``after`` to go on from
             the same place. ``None`` on every other error.
+        head: Set on an error ``follow_signals`` raises: the newest feed
+            head it kept, ``None`` when it kept none. ``None`` on every
+            other error.
+        after_event_hash: Set on an error ``follow_signals`` raises: the
+            ``event_hash`` of event ``last_sequence``, the last event
+            finished, or the ``after_event_hash`` given when none was
+            finished (``None`` when neither). Pass it back with
+            ``last_sequence`` to resume. ``None`` on every other error.
     """
 
     last_sequence: Optional[int] = None
+    head: Optional[Mapping[str, Any]] = None
+    after_event_hash: Optional[str] = None
 
 
 class ValidationError(VerdifaxError):

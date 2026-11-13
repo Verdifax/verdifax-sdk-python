@@ -29,9 +29,18 @@ from typing import (
     Union as _Union,
 )
 
-from ._requests import MAX_BATCH_ROWS, format_provider_payload
+from ._requests import MAX_BATCH_ROWS, DeletedJobLinks, RunDeletion, format_provider_payload
 from ._retry import DEFAULT_MAX_RETRIES
-from ._signals import SIGNAL_KINDS, pending_signoffs, signal_event_hash, verify_webhook
+from ._signals import (
+    FEED_HEAD_FORM,
+    SIGNAL_KINDS,
+    AsyncSignalFollower,
+    FeedHead,
+    SignalFollower,
+    pending_signoffs,
+    signal_event_hash,
+    verify_webhook,
+)
 from ._signoffs import approver_key_proof, signoff_preimage
 from ._signing import (
     RequestKeyPair,
@@ -237,6 +246,7 @@ __all__ = [
     "APIError",
     "AccountRunsExport",
     "AsyncJob",
+    "AsyncSignalFollower",
     "AsyncVerdifaxClient",
     "AttestationReceipt",
     "AivpFinding",
@@ -245,17 +255,21 @@ __all__ = [
     "ConnectionError",
     "DCAEEngineHint",
     "DEFAULT_MAX_RETRIES",
+    "DeletedJobLinks",
     "ExecuteBatchResponse",
     "ExecuteBatchResult",
     "ExecuteRequest",
     "ExecutionManifest",
     "ExportRow",
+    "FEED_HEAD_FORM",
+    "FeedHead",
     "Job",
     "KERNEL_NAMES",
     "MAX_BATCH_ROWS",
     "RUN_STATUSES",
     "RequestKeyPair",
     "Run",
+    "RunDeletion",
     "RunList",
     "RunSummary",
     "RunsExport",
@@ -263,6 +277,7 @@ __all__ = [
     "SIGNAL_KINDS",
     "STAGE_NAMES",
     "SignOffTarget",
+    "SignalFollower",
     "StageError",
     "StageResult",
     "UnsupportedOperationError",

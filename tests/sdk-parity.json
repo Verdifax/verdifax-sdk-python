@@ -335,6 +335,12 @@
       "node": "verifyWebhook",
       "python": "verify_webhook",
       "r": "verdifax_verify_webhook"
+    },
+    "rotate_account_request_key": {
+      "go": "RotateAccountRequestKey",
+      "node": "rotateAccountRequestKey",
+      "python": "rotate_account_request_key",
+      "r": "verdifax_rotate_account_request_key"
     }
   },
   "notes": {
@@ -349,6 +355,18 @@
       "node": "govern",
       "python": "govern",
       "r": "govern"
+    },
+    "follow_on_head": {
+      "go": "OnHead",
+      "node": "onHead",
+      "python": "on_head",
+      "r": "on_head"
+    },
+    "follow_after_event_hash": {
+      "go": "AfterEventHash",
+      "node": "afterEventHash",
+      "python": "after_event_hash",
+      "r": "after_event_hash"
     }
   },
   "python_only": [

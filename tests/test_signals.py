@@ -13,9 +13,11 @@ import hmac
 import inspect
 import json
 import re
+import typing
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired
 
 import httpx
 import pytest
@@ -25,10 +27,13 @@ from tests.test_accounts import parity_names
 from tests.test_jobs import VECTOR, async_client, scripted, sent_body, sync_client
 from tests.test_parity import responder
 from verdifax import (
+    FEED_HEAD_FORM,
     SIGNAL_KINDS,
     APIError,
+    AsyncSignalFollower,
     AsyncVerdifaxClient,
     ConnectionError as VerdifaxConnectionError,
+    SignalFollower,
     ValidationError,
     VerdifaxClient,
     VerdifaxError,
@@ -36,7 +41,7 @@ from verdifax import (
     signal_event_hash,
     verify_webhook,
 )
-from verdifax._signals import signals_timeout
+from verdifax._signals import feed_head, signals_timeout
 
 SECRET = VECTOR["webhook_secret"]
 STAMP = VECTOR["webhook_timestamp"]
@@ -484,7 +489,10 @@ def test_the_async_signature_matches_the_sync_one(name):
     "name, params",
     [
         ("get_signals", ["self", "after", "limit", "wait", "as_owner"]),
-        ("follow_signals", ["self", "after", "wait", "as_owner"]),
+        (
+            "follow_signals",
+            ["self", "after", "wait", "as_owner", "on_head", "after_event_hash"],
+        ),
         ("create_feed_key", ["self", "name", "expires_at"]),
         ("revoke_feed_key", ["self", "id"]),
         ("create_webhook", ["self", "url", "types"]),
@@ -506,6 +514,8 @@ def test_the_documented_defaults():
     follow = inspect.signature(VerdifaxClient.follow_signals).parameters
     assert (follow["after"].default, follow["wait"].default) == (0, 25)
     assert follow["as_owner"].default is False
+    assert follow["on_head"].default is None
+    assert follow["after_event_hash"].default is None
     hook = inspect.signature(verify_webhook).parameters
     assert (hook["tolerance_seconds"].default, hook["now"].default) == (300, None)
 
@@ -1048,7 +1058,9 @@ async def test_async_follow_signals_follows_next_after_and_stops_when_the_caller
     read: list[int] = []
     async with async_client(feed_script(seen, pages)) as client:
         events = client.follow_signals(as_owner=True)
-        assert inspect.isasyncgen(events)
+        assert isinstance(events, AsyncSignalFollower)
+        assert isinstance(events, AsyncIterator)
+        assert events.head is None
         assert seen == []
         async for item in events:
             read.append(item["data"]["sequence"])
@@ -1120,6 +1132,812 @@ async def test_async_signal_methods_refuse_bad_input_without_a_request():
     assert seen == []
 
 
+# ── the feed head (round 61) ──────────────────────────────────────────────────
+
+
+HEAD_VECTOR = json.loads(
+    (Path(__file__).parent / "sdk-feed-head-vector.json").read_text(encoding="utf-8")
+)
+
+
+def head(sequence: int, stated_at: str = "2026-11-12T21:58:20.123456789Z") -> dict[str, Any]:
+    """The head statement the server ends a page that reaches the feed's end with.
+
+    A statement made again later (another ``stated_at``) has another hash.
+    """
+    statement = hashlib.sha256(f"{sequence}|{stated_at}".encode()).hexdigest()
+    return {
+        "format": "verdifax.feed-head.v1",
+        "account": "account-7",
+        "sequence": sequence,
+        "head_hash": "f" * 64,
+        "stated_at": stated_at,
+        "head_statement_hash": statement,
+        "anchor": {"kind": "receipt_anchor", "receipt_kind": "feed_head", "log_index": 41},
+    }
+
+
+def page_at_end(sequences: list[int], after: int, **head_fields: Any) -> dict[str, Any]:
+    """A page that reaches the feed's end, with its head."""
+    end = sequences[-1] if sequences else after
+    stated = head(end, head_fields.pop("stated_at")) if "stated_at" in head_fields else head(end)
+    return {**page(sequences, after, newest=end), "head": {**stated, **head_fields}}
+
+
+LATER = "2026-11-12T22:03:20Z"
+
+
+def no_more() -> httpx.Response:
+    """A fresh answer to the read after a test's last page: an httpx response is read once."""
+    return httpx.Response(400, json={"error": "no more pages in this test"})
+
+
+def test_the_head_form_and_types_are_exported():
+    assert FEED_HEAD_FORM == "verdifax.feed-head.v1"
+    for name in (
+        "FEED_HEAD_FORM",
+        "FeedHead",
+        "RunDeletion",
+        "SignalFollower",
+        "AsyncSignalFollower",
+    ):
+        assert name in verdifax.__all__
+        assert hasattr(verdifax, name)
+    assert set(verdifax.FeedHead.__annotations__) == set(head(1))
+    hints = typing.get_type_hints(verdifax.RunDeletion, include_extras=True)
+    assert hints["log_entries"] == NotRequired[list[str]]
+    assert typing.get_type_hints(verdifax.FeedHead)["sequence"] is int
+
+
+@pytest.mark.parametrize("as_owner, path", [(False, "/signals"), (True, "/account/signals")])
+def test_get_signals_keeps_the_head_beside_the_events(as_owner, path):
+    seen: list[httpx.Request] = []
+    answer = page_at_end([8, 9], 7)
+    got = sync_client(responder(seen, body=answer)).get_signals(after=7, as_owner=as_owner)
+    assert got == answer
+    assert got["head"] == head(9)
+    assert set(got["head"]) == {
+        "format",
+        "account",
+        "sequence",
+        "head_hash",
+        "stated_at",
+        "head_statement_hash",
+        "anchor",
+    }
+    assert [e["data"]["sequence"] for e in got["events"]] == [8, 9]
+    assert seen[0].url.path == path
+
+
+def test_an_empty_page_at_the_end_keeps_its_head():
+    answer = page_at_end([], 9)
+    assert sync_client(responder([], body=answer)).get_signals(after=9)["head"] == head(9)
+
+
+def test_a_page_without_a_head_or_with_a_null_head_is_read_as_before():
+    for answer in (page([8, 9], 7), {**page([8, 9], 7), "head": None}):
+        assert sync_client(responder([], body=answer)).get_signals(after=7) == answer
+
+
+def test_a_head_with_no_anchor_is_kept():
+    answer = page_at_end([9], 8)
+    del answer["head"]["anchor"]
+    assert sync_client(responder([], body=answer)).get_signals(after=8) == answer
+
+
+def test_a_head_stating_another_end_is_returned_as_served():
+    """The page is the server's; following never keeps such a head (the vector)."""
+    answer = page_at_end([8, 9], 7, sequence=10)
+    assert sync_client(responder([], body=answer)).get_signals(after=7) == answer
+
+
+@pytest.mark.parametrize(
+    "tamper, message",
+    [
+        (lambda p: p.update(head=[]), "a head that is not an object"),
+        (lambda p: p.update(head="head"), "a head that is not an object"),
+        (
+            lambda p: p["head"].update(format="verdifax.signoff-head.v1"),
+            "not verdifax.feed-head.v1",
+        ),
+        (lambda p: p["head"].pop("format"), "not verdifax.feed-head.v1"),
+        (lambda p: p["head"].update(account="7"), "no usable account"),
+        (lambda p: p["head"].update(account="account-07"), "no usable account"),
+        (lambda p: p["head"].pop("account"), "no usable account"),
+        (lambda p: p["head"].update(sequence=0), "no usable sequence"),
+        (lambda p: p["head"].update(sequence=True), "no usable sequence"),
+        (lambda p: p["head"].update(sequence="9"), "no usable sequence"),
+        (lambda p: p["head"].update(head_hash="F" * 64), "no usable head_hash"),
+        (lambda p: p["head"].update(head_hash="f" * 63), "no usable head_hash"),
+        (lambda p: p["head"].pop("head_statement_hash"), "no usable head_statement_hash"),
+        (lambda p: p["head"].update(stated_at=""), "no usable stated_at"),
+        (lambda p: p["head"].update(stated_at=1), "no usable stated_at"),
+        (lambda p: p["head"].update(anchor="entry"), "anchor is not an object"),
+    ],
+)
+def test_a_malformed_head_is_refused(tamper, message):
+    answer = page_at_end([8, 9], 7)
+    tamper(answer)
+    with pytest.raises(VerdifaxError, match=message):
+        sync_client(responder([], body=answer)).get_signals(after=7)
+
+
+def test_feed_head_returns_the_head_and_makes_no_request():
+    answer = page_at_end([9], 8)
+    assert feed_head(answer, "a saved page") is answer["head"]
+    with pytest.raises(VerdifaxError, match="a saved page returned a head with no usable sequence"):
+        feed_head({**answer, "head": {**answer["head"], "sequence": -1}}, "a saved page")
+
+
+# The shared vector (sdk-feed-head-vector.json), the same in all four SDKs.
+
+
+def statement_hash(label: str) -> str:
+    """The head_statement_hash a vector head's statement label stands for."""
+    return hashlib.sha256(label.encode()).hexdigest()
+
+
+def vector_event_hash(sequence: int) -> str:
+    """The event_hash of the vector's event at ``sequence``."""
+    return hashlib.sha256(f"e{sequence}".encode()).hexdigest()
+
+
+def vector_page(spec: dict[str, Any], after: int) -> dict[str, Any]:
+    served = page(spec["events"], after, newest=spec["next_after"])
+    served["next_after"] = spec["next_after"]
+    for served_event in served["events"]:
+        served_event["data"]["event_hash"] = vector_event_hash(served_event["data"]["sequence"])
+    if spec["head"] is not None:
+        named = spec["head"].get("head_hash_of", spec["head"]["sequence"])
+        served["head"] = {
+            **head(spec["head"]["sequence"]),
+            "head_hash": vector_event_hash(named),
+            "head_statement_hash": statement_hash(spec["head"]["statement"]),
+        }
+    return served
+
+
+def vector_start(case: dict[str, Any]) -> dict[str, Any]:
+    """The follow_signals arguments a case starts with: after, and the saved hash."""
+    start = case.get("start")
+    if start is None:
+        return {"after": 0}
+    named = start["after_hash_of"]
+    saved = None if named is None else vector_event_hash(named)
+    return {"after": start["after"], "after_event_hash": saved}
+
+
+def vector_pages(case: dict[str, Any]) -> list[dict[str, Any]]:
+    pages, after = [], vector_start(case)["after"]
+    for spec in case["pages"]:
+        pages.append(vector_page(spec, after))
+        after = spec["next_after"]
+    return pages
+
+
+def as_vector(case: dict[str, Any], kept: Any) -> Any:
+    """A kept or reported head in the vector's form, {sequence, statement}."""
+    if kept is None:
+        return None
+    labels = {
+        statement_hash(spec["head"]["statement"]): spec["head"]["statement"]
+        for spec in case["pages"]
+        if spec["head"] is not None
+    }
+    return {"sequence": kept["sequence"], "statement": labels[kept["head_statement_hash"]]}
+
+
+def test_the_vector_is_the_shared_one():
+    shared = ROOT.parent / "scripts" / "sdk-feed-head-vector.json"
+    if not shared.exists():
+        pytest.skip("the shared scripts folder is not beside this repository")
+    assert (Path(__file__).parent / "sdk-feed-head-vector.json").read_bytes() == (
+        shared.read_bytes()
+    )
+    assert len(HEAD_VECTOR["cases"]) == 13
+
+
+@pytest.mark.parametrize("case", HEAD_VECTOR["cases"], ids=lambda case: case["name"])
+def test_the_follower_keeps_the_head_as_the_vector_says(case):
+    reported: list[Any] = []
+    client = sync_client(feed_script([], [*vector_pages(case), no_more()]))
+    events = client.follow_signals(
+        wait=1, on_head=lambda h: reported.append(as_vector(case, h)), **vector_start(case)
+    )
+    stop = case["handle_until"]
+    handled: list[int] = []
+    if stop is None:
+        with pytest.raises(APIError, match="no more pages") as caught:
+            for item in events:
+                handled.append(item["data"]["sequence"])
+        # The error that stops following carries the kept head.
+        assert as_vector(case, caught.value.head) == case["expected_kept"]
+    else:
+        for item in events:
+            handled.append(item["data"]["sequence"])
+            if item["data"]["sequence"] == stop:
+                break
+    assert (
+        handled
+        == [n for spec in case["pages"] for n in spec["events"]][
+            : None if stop is None else handled.index(stop) + 1
+        ]
+    )
+    assert as_vector(case, events.head) == case["expected_kept"]
+    assert reported == case["expected_reported"]
+
+
+@pytest.mark.parametrize("case", HEAD_VECTOR["cases"], ids=lambda case: case["name"])
+async def test_async_the_follower_keeps_the_head_as_the_vector_says(case):
+    reported: list[Any] = []
+    stop = case["handle_until"]
+    async with async_client(feed_script([], [*vector_pages(case), no_more()])) as client:
+        events = client.follow_signals(
+            wait=1, on_head=lambda h: reported.append(as_vector(case, h)), **vector_start(case)
+        )
+        if stop is None:
+            with pytest.raises(APIError, match="no more pages") as caught:
+                async for item in events:
+                    pass
+            assert as_vector(case, caught.value.head) == case["expected_kept"]
+        else:
+            async for item in events:
+                if item["data"]["sequence"] == stop:
+                    break
+            await events.aclose()
+    assert as_vector(case, events.head) == case["expected_kept"]
+    assert reported == case["expected_reported"]
+
+
+# The rule, case by case, with whole heads.
+
+
+def test_follow_signals_never_yields_the_head_and_keeps_it_after_its_page_is_handled(
+    monkeypatch,
+):
+    monkeypatch.setattr("verdifax._signals.time.sleep", lambda seconds: None)
+    seen: list[httpx.Request] = []
+    pages = [
+        page([1, 2], 0, newest=5),
+        page_at_end([3, 4, 5], 2),
+        page_at_end([], 5, stated_at=LATER),
+        page_at_end([6], 5),
+        page([7], 6, newest=8),
+    ]
+    reported: list[dict[str, Any]] = []
+    events = sync_client(feed_script(seen, pages)).follow_signals(on_head=reported.append)
+    assert isinstance(events, SignalFollower)
+    assert isinstance(events, Iterator)
+    assert iter(events) is events
+    assert events.head is None
+    heads: dict[int, Any] = {}
+    read: list[dict[str, Any]] = []
+    for item in events:
+        read.append(item)
+        heads[item["data"]["sequence"]] = events.head
+        if item["data"]["sequence"] == 7:
+            break
+    assert [item["data"]["sequence"] for item in read] == [1, 2, 3, 4, 5, 6, 7]
+    # Every item yielded is an event; no head is ever yielded.
+    assert all(item["specversion"] == "1.0" and "format" not in item for item in read)
+    # While events 3 to 5 are handled, their page's head is not yet kept.
+    assert [heads[n] for n in (1, 2, 3, 4, 5)] == [None] * 5
+    # Event 5 handled: head 5 kept, then restated by the empty page, then
+    # head 6 kept once event 6 is handled. A page short of the end keeps it.
+    assert heads[6] == head(5, LATER)
+    assert heads[7] == head(6) and events.head == head(6)
+    assert reported == [head(5), head(5, LATER), head(6)]
+    assert [query(r) for r in seen] == [
+        "after=0&wait=25",
+        "after=2&wait=25",
+        "after=5&wait=25",
+        "after=5&wait=25",
+        "after=6&wait=25",
+    ]
+
+
+def test_the_same_head_on_idle_reads_is_reported_once(monkeypatch):
+    monkeypatch.setattr("verdifax._signals.time.sleep", lambda seconds: None)
+    pages = [page_at_end([5], 4), page_at_end([], 5), page_at_end([], 5), page([6], 5)]
+    reported: list[dict[str, Any]] = []
+    events = sync_client(feed_script([], pages)).follow_signals(after=4, on_head=reported.append)
+    assert [next(events)["data"]["sequence"] for _ in range(2)] == [5, 6]
+    assert events.head == head(5)
+    assert reported == [head(5)]
+
+
+def test_a_head_on_a_page_the_caller_did_not_finish_is_not_kept():
+    seen: list[httpx.Request] = []
+    reported: list[Any] = []
+    client = sync_client(feed_script(seen, [page_at_end([5, 6], 4)]))
+    events = client.follow_signals(after=4, on_head=reported.append)
+    assert next(events)["data"]["sequence"] == 5
+    assert next(events)["data"]["sequence"] == 6
+    events.close()
+    assert events.head is None and reported == []
+    with pytest.raises(StopIteration):
+        next(events)
+    assert len(seen) == 1
+
+
+def test_a_head_not_matching_next_after_is_not_kept(monkeypatch):
+    monkeypatch.setattr("verdifax._signals.time.sleep", lambda seconds: None)
+    pages = [page_at_end([5], 4, sequence=6), page_at_end([6], 5, sequence=5), no_more()]
+    reported: list[Any] = []
+    events = sync_client(feed_script([], pages)).follow_signals(after=4, on_head=reported.append)
+    with pytest.raises(APIError) as caught:
+        list(events)
+    assert events.head is None and caught.value.head is None and reported == []
+
+
+def test_a_head_whose_head_hash_is_not_the_last_handled_events_is_not_kept(monkeypatch):
+    monkeypatch.setattr("verdifax._signals.time.sleep", lambda seconds: None)
+    pages = [
+        page_at_end([5], 4, head_hash="e" * 64),
+        page_at_end([], 5, head_hash="e" * 64, stated_at=LATER),
+        page_at_end([], 5, stated_at=LATER),
+        no_more(),
+    ]
+    reported: list[Any] = []
+    events = sync_client(feed_script([], pages)).follow_signals(after=4, on_head=reported.append)
+    with pytest.raises(APIError):
+        list(events)
+    # Only the head carrying event 5's hash ("f" * 64 in these pages) is kept.
+    assert reported == [head(5, LATER)] and events.head == head(5, LATER)
+
+
+def test_no_head_is_kept_before_an_event_is_handled(monkeypatch):
+    """With no event handled yet there is no last event to match, so a head on
+    an empty page at the start is not kept; the next one, after an event, is."""
+    monkeypatch.setattr("verdifax._signals.time.sleep", lambda seconds: None)
+    pages = [page_at_end([], 5), page_at_end([6], 5), no_more()]
+    reported: list[Any] = []
+    events = sync_client(feed_script([], pages)).follow_signals(after=5, on_head=reported.append)
+    with pytest.raises(APIError):
+        list(events)
+    assert reported == [head(6)]
+
+
+def test_a_resumed_follower_with_the_saved_hash_keeps_the_head_it_is_served(monkeypatch):
+    monkeypatch.setattr("verdifax._signals.time.sleep", lambda seconds: None)
+    seen: list[httpx.Request] = []
+    pages = [page_at_end([], 5), page_at_end([6], 5, head_hash="e" * 64), no_more()]
+    reported: list[Any] = []
+    events = sync_client(feed_script(seen, pages)).follow_signals(
+        after=5, after_event_hash="f" * 64, on_head=reported.append
+    )
+    with pytest.raises(APIError) as caught:
+        list(events)
+    # Event 5's saved hash matches the first head. The second names another
+    # hash than event 6's, the last handled, so it is not kept.
+    assert reported == [head(5)] and events.head == head(5) == caught.value.head
+    assert [query(r) for r in seen][:1] == ["after=5&wait=25"]
+
+
+def test_a_resumed_follower_with_another_saved_hash_keeps_no_head(monkeypatch):
+    monkeypatch.setattr("verdifax._signals.time.sleep", lambda seconds: None)
+    pages = [page_at_end([], 5), no_more()]
+    for saved in ("e" * 64, "", None):
+        reported: list[Any] = []
+        events = sync_client(feed_script([], list(pages))).follow_signals(
+            after=5, after_event_hash=saved, on_head=reported.append
+        )
+        with pytest.raises(APIError):
+            list(events)
+        assert reported == [] and events.head is None
+        pages = [page_at_end([], 5), no_more()]
+
+
+BAD_HASHES = ["f" * 63, "F" * 64, "f" * 65, "g" * 64, 64]
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+def test_a_bad_after_event_hash_is_refused_before_anything_is_sent(bad):
+    seen: list[httpx.Request] = []
+    with pytest.raises(ValidationError, match="after_event_hash"):
+        sync_client(responder(seen)).follow_signals(after=5, after_event_hash=bad)
+    assert seen == []
+
+
+async def test_async_after_event_hash_is_checked_and_used():
+    seen: list[httpx.Request] = []
+    async with async_client(feed_script(seen, [page_at_end([], 5), no_more()])) as client:
+        for bad in BAD_HASHES:
+            with pytest.raises(ValidationError, match="after_event_hash"):
+                client.follow_signals(after=5, after_event_hash=bad)
+        assert seen == []
+        events = client.follow_signals(after=5, after_event_hash="f" * 64)
+        with pytest.raises(APIError) as caught:
+            async for item in events:
+                pass
+    assert events.head == head(5) == caught.value.head
+
+
+def test_the_error_that_stops_following_carries_the_last_finished_events_hash():
+    pages = [page([1, 2], 0, newest=2), no_more()]
+    for served in pages[0]["events"]:
+        served["data"]["event_hash"] = vector_event_hash(served["data"]["sequence"])
+    events = sync_client(feed_script([], pages)).follow_signals()
+    with pytest.raises(APIError) as caught:
+        list(events)
+    assert caught.value.last_sequence == 2
+    assert caught.value.after_event_hash == vector_event_hash(2)
+    # With no event finished, it is the hash given, or None.
+    for given in (vector_event_hash(9), None):
+        events = sync_client(feed_script([], [no_more()])).follow_signals(
+            after=9, after_event_hash=given
+        )
+        with pytest.raises(APIError) as caught:
+            next(events)
+        assert (caught.value.last_sequence, caught.value.after_event_hash) == (9, given)
+
+
+def test_a_bad_page_mid_feed_carries_the_hash_of_the_event_before_it():
+    first = page([1], 0, newest=3)
+    first["events"][0]["data"]["event_hash"] = vector_event_hash(1)
+    bad = {**page([2, 3], 1), "next_after": 5}
+    events = sync_client(feed_script([], [first, bad])).follow_signals()
+    assert next(events)["data"]["sequence"] == 1
+    with pytest.raises(VerdifaxError, match="would skip or repeat") as caught:
+        next(events)
+    assert (caught.value.last_sequence, caught.value.after_event_hash) == (1, vector_event_hash(1))
+
+
+async def test_async_the_error_that_stops_following_carries_the_last_finished_events_hash():
+    first = page([4], 3, newest=4)
+    first["events"][0]["data"]["event_hash"] = vector_event_hash(4)
+    async with async_client(feed_script([], [first, no_more()])) as client:
+        with pytest.raises(APIError) as caught:
+            async for item in client.follow_signals(after=3, after_event_hash=vector_event_hash(3)):
+                pass
+    assert (caught.value.last_sequence, caught.value.after_event_hash) == (4, vector_event_hash(4))
+    async with async_client(feed_script([], [no_more()])) as client:
+        with pytest.raises(APIError) as caught:
+            async for item in client.follow_signals(after=3):
+                pass
+    assert (caught.value.last_sequence, caught.value.after_event_hash) == (3, None)
+
+
+def test_other_errors_carry_no_after_event_hash():
+    with pytest.raises(ValidationError) as caught:
+        sync_client(responder([])).get_signals(after=-1)
+    assert caught.value.after_event_hash is None
+
+
+def test_an_error_while_following_carries_the_kept_head():
+    bad = page_at_end([2, 3], 1, head_hash="E" * 64)
+    events = sync_client(feed_script([], [page_at_end([1], 0), bad])).follow_signals()
+    assert next(events)["data"]["sequence"] == 1
+    with pytest.raises(VerdifaxError, match="no usable head_hash") as caught:
+        next(events)
+    assert caught.value.last_sequence == 1
+    assert caught.value.head == head(1) == events.head
+
+
+def test_on_head_must_be_a_function():
+    seen: list[httpx.Request] = []
+    with pytest.raises(ValidationError, match="on_head must be a function or None, got str"):
+        sync_client(responder(seen)).follow_signals(on_head="print")
+    assert seen == []
+
+
+async def test_async_follow_signals_never_yields_the_head_and_keeps_it_after_its_page(
+    monkeypatch,
+):
+    async def pause(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("verdifax._signals.asyncio.sleep", pause)
+    seen: list[httpx.Request] = []
+    pages = [page([1], 0, newest=3), page_at_end([2, 3], 1), page([4], 3, newest=5)]
+    read: list[dict[str, Any]] = []
+    heads: list[Any] = []
+    reported: list[Any] = []
+    async with async_client(feed_script(seen, pages)) as client:
+        events = client.follow_signals(as_owner=True, on_head=reported.append)
+        assert isinstance(events, AsyncSignalFollower)
+        assert events.__aiter__() is events
+        async for item in events:
+            read.append(item)
+            heads.append(events.head)
+            if item["data"]["sequence"] == 4:
+                break
+        await events.aclose()
+        with pytest.raises(ValidationError, match="on_head must be a function"):
+            client.follow_signals(on_head=1)
+    assert [item["data"]["sequence"] for item in read] == [1, 2, 3, 4]
+    assert all(item["specversion"] == "1.0" and "format" not in item for item in read)
+    assert heads == [None, None, None, head(3)]
+    assert reported == [head(3)]
+    assert [r.url.path for r in seen] == ["/account/signals"] * 3
+
+
+async def test_async_get_signals_keeps_the_head_and_refuses_a_malformed_one():
+    answer = page_at_end([8, 9], 7)
+    async with async_client(responder([], body=answer)) as client:
+        assert (await client.get_signals(after=7))["head"] == head(9)
+    bad = page_at_end([8, 9], 7, format="verdifax.feed-head.v2")
+    async with async_client(responder([], body=bad)) as client:
+        with pytest.raises(VerdifaxError, match="not verdifax.feed-head.v1"):
+            await client.get_signals(after=7)
+
+
+# ── a deleted record's tombstone in the feed (round 60 fields) ────────────────
+
+
+JOB_LINKS = {
+    "previous_record_hashes": ["1" * 64, "2" * 64],
+    "external_previous": ["a" * 64],
+    "final": True,
+}
+
+
+def tombstone(**fields: Any) -> dict[str, Any]:
+    return {
+        "format": "verdifax.run-deletion.v1",
+        "decided_by": "owner",
+        "run_id": 42,
+        "record_hash": "c" * 64,
+        "job_id": "job-1",
+        "step_id": "s2",
+        "job_links": JOB_LINKS,
+        "log_entries": ["1844674407370955161", "1844674407370955162"],
+        "changed_at": "2026-11-12T18:00:01.5Z",
+        "owner_signature": {"public_key": "p", "signature": "s", "signed_at": "t", "nonce": "n"},
+        "signal": {"signal_account": "account-7", "signal_sequence": 9},
+        "deletion_hash": "b" * 64,
+        "anchor": {"kind": "receipt_anchor", "receipt_kind": "run_deletion"},
+        **fields,
+    }
+
+
+def deleted_event(sequence: int, deleted: Any) -> dict[str, Any]:
+    """An event whose entry was a since deleted record: a refused run's receipt."""
+    served = event(sequence, "run.refused")
+    served["data"].update(entry=None, run_id=42, deleted=deleted)
+    return served
+
+
+def test_a_deleted_records_tombstone_is_read_with_every_field():
+    answer = {"events": [event(8), deleted_event(9, tombstone())], "next_after": 9, "newest": 9}
+    raw = json.dumps(answer)
+    got = sync_client(lambda request: httpx.Response(200, text=raw)).get_signals(after=7)
+    assert got == answer
+    deleted = got["events"][1]["data"]["deleted"]
+    assert deleted["log_entries"] == ["1844674407370955161", "1844674407370955162"]
+    assert set(deleted) == set(verdifax.RunDeletion.__annotations__)
+    # Saved again, the page is the bytes the server sent.
+    assert json.dumps(got) == raw
+
+
+@pytest.mark.parametrize(
+    "deleted, message",
+    [
+        ([], "event 9 has a run deletion that is not an object"),
+        ("gone", "event 9 has a run deletion that is not an object"),
+        (tombstone(run_id="42"), "run_id is not a whole number"),
+        (tombstone(run_id=True), "run_id is not a whole number"),
+        (tombstone(log_entries="12"), "log_entries is not a list of strings"),
+        (tombstone(log_entries=[12]), "log_entries is not a list of strings"),
+        (tombstone(log_entries=[None]), "log_entries is not a list of strings"),
+    ],
+)
+def test_a_malformed_tombstone_in_the_feed_is_refused(deleted, message):
+    answer = {"events": [deleted_event(9, deleted)], "next_after": 9, "newest": 9}
+    with pytest.raises(VerdifaxError, match=message):
+        sync_client(responder([], body=answer)).get_signals(after=8)
+
+
+def test_a_tombstone_with_no_log_entries_or_a_null_deleted_is_read():
+    no_entries = tombstone()
+    del no_entries["log_entries"]
+    answer = {
+        "events": [deleted_event(8, no_entries), deleted_event(9, None)],
+        "next_after": 9,
+        "newest": 9,
+    }
+    assert sync_client(responder([], body=answer)).get_signals(after=7) == answer
+
+
+def test_job_links_are_read_as_sent_and_a_tombstone_without_them_too():
+    older = tombstone()
+    del older["job_links"]
+    outside_a_job = tombstone()
+    for name in ("job_id", "step_id", "job_links"):
+        del outside_a_job[name]
+    shapes = [tombstone(), tombstone(job_links={}), tombstone(job_links={"final": False}), older]
+    events = [deleted_event(n, t) for n, t in enumerate([*shapes, outside_a_job], start=1)]
+    answer = {"events": events, "next_after": 5, "newest": 5}
+    raw = json.dumps(answer)
+    got = sync_client(lambda request: httpx.Response(200, text=raw)).get_signals()
+    assert got == answer and json.dumps(got) == raw
+    assert got["events"][0]["data"]["deleted"]["job_links"] == JOB_LINKS
+    assert got["events"][1]["data"]["deleted"]["job_links"] == {}
+    assert "job_links" not in got["events"][3]["data"]["deleted"]
+    hints = typing.get_type_hints(verdifax.RunDeletion, include_extras=True)
+    assert hints["job_links"] == NotRequired[verdifax.DeletedJobLinks]
+    assert set(verdifax.DeletedJobLinks.__annotations__) == set(JOB_LINKS)
+
+
+TOO_MANY = [format(n, "064x") for n in range(65)]
+
+
+@pytest.mark.parametrize(
+    "links, message",
+    [
+        ([], "job_links is not an object"),
+        ("final", "job_links is not an object"),
+        (
+            {"previous_record_hashes": "1" * 64},
+            "previous_record_hashes is not a list of at most 64",
+        ),
+        (
+            {"previous_record_hashes": TOO_MANY},
+            "previous_record_hashes is not a list of at most 64",
+        ),
+        ({"external_previous": TOO_MANY[:17]}, "external_previous is not a list of at most 16"),
+        ({"previous_record_hashes": ["1" * 63]}, r"previous_record_hashes\[0\] is not a 64"),
+        ({"external_previous": ["A" * 64]}, r"external_previous\[0\] is not a 64"),
+        ({"external_previous": [7]}, r"external_previous\[0\] is not a 64"),
+        ({"previous_record_hashes": ["2" * 64, "1" * 64]}, "not sorted with no repeats"),
+        ({"previous_record_hashes": ["1" * 64, "1" * 64]}, "not sorted with no repeats"),
+        ({"final": "true"}, "job_links.final is not a bool"),
+        ({"final": 1}, "job_links.final is not a bool"),
+    ],
+)
+def test_malformed_job_links_are_refused(links, message):
+    answer = {
+        "events": [deleted_event(9, tombstone(job_links=links))],
+        "next_after": 9,
+        "newest": 9,
+    }
+    with pytest.raises(VerdifaxError, match=message):
+        sync_client(responder([], body=answer)).get_signals(after=8)
+
+
+def test_job_links_at_their_limits_are_read():
+    links = {"previous_record_hashes": TOO_MANY[:64], "external_previous": TOO_MANY[:16]}
+    answer = {
+        "events": [deleted_event(9, tombstone(job_links=links))],
+        "next_after": 9,
+        "newest": 9,
+    }
+    assert sync_client(responder([], body=answer)).get_signals(after=8) == answer
+
+
+def test_job_links_without_a_job_id_are_refused():
+    record = tombstone(job_id="")
+    answer = {"events": [deleted_event(9, record)], "next_after": 9, "newest": 9}
+    with pytest.raises(VerdifaxError, match="job_links but no job_id"):
+        sync_client(responder([], body=answer)).get_signals(after=8)
+
+
+def deleted_run_feed() -> dict[str, Any]:
+    """A feed as the server serves it after run 60 was deleted.
+
+    Run 60's run.sealed event keeps its own entry; its run.deleted event
+    names it. Run 62 was refused and then deleted: its receipt event is
+    served with entry None and the tombstone in data["deleted"]."""
+    sealed_60 = event(1, "run.sealed")
+    sealed_60["data"]["entry"] = {"run_id": 60, "signoff_required": True}
+    sealed_61 = event(2, "run.sealed")
+    sealed_61["data"]["entry"] = {"run_id": 61, "signoff_required": True}
+    refused_62 = deleted_event(3, tombstone(run_id=62))
+    deleted_60 = event(4, "run.deleted")
+    deleted_60["data"]["entry"] = tombstone(run_id=60)
+    deleted_62 = event(5, "run.deleted")
+    deleted_62["data"]["entry"] = tombstone(run_id=62)
+    events = [sealed_60, sealed_61, refused_62, deleted_60, deleted_62]
+    return {"events": events, "next_after": 5, "newest": 5}
+
+
+def test_pending_signoffs_reads_a_feed_with_deleted_records_as_served():
+    """A deleted run's run.sealed plus its run.deleted leaves the run out, and
+    a deleted refused run's receipt event (entry None) is not read for runs."""
+    from verdifax import pending_signoffs
+
+    served = deleted_run_feed()
+    assert pending_signoffs(served["events"]) == [61]
+    page_read = sync_client(responder([], body=served)).get_signals()
+    assert pending_signoffs(page_read["events"]) == [61]
+    followed = sync_client(feed_script([], [served])).follow_signals()
+    assert pending_signoffs([next(followed) for _ in range(5)]) == [61]
+    # Without the run.deleted event, run 60 is still pending.
+    assert pending_signoffs(served["events"][:3]) == [60, 61]
+
+
+def test_pending_signoffs_refuses_a_run_sealed_event_with_a_null_entry():
+    """The server never serves run.sealed with a null entry: it keeps its own
+    entry. One that names no run is refused, with or without a tombstone."""
+    from verdifax import pending_signoffs
+
+    for deleted in (None, tombstone(run_id=60)):
+        bad = event(5, "run.sealed")
+        bad["data"].update(entry=None, deleted=deleted)
+        with pytest.raises(
+            VerdifaxError, match="run.sealed entry of event account-7/5 names no run"
+        ):
+            pending_signoffs([bad])
+
+
+async def test_async_pending_signoffs_reads_a_feed_with_deleted_records_as_served():
+    from verdifax import pending_signoffs
+
+    served = deleted_run_feed()
+    async with async_client(feed_script([], [served, served])) as client:
+        events = client.follow_signals()
+        assert pending_signoffs([await events.__anext__() for _ in range(5)]) == [61]
+        await events.aclose()
+        assert pending_signoffs((await client.get_signals(after=0))["events"]) == [61]
+
+
+# The shared pending sign-offs vector (sdk-pending-signoffs-vector.json).
+
+PENDING_VECTOR = json.loads(
+    (Path(__file__).parent / "sdk-pending-signoffs-vector.json").read_text(encoding="utf-8")
+)
+
+
+def pending_feed(case: dict[str, Any]) -> dict[str, Any]:
+    """A case's abstract events as served events on one feed page."""
+    events = []
+    for sequence, spec in enumerate(case["events"], start=1):
+        served = event(sequence, spec["kind"])
+        served["data"]["entry"] = spec["entry"]
+        if spec["deleted"] is not None:
+            served["data"]["deleted"] = tombstone(**spec["deleted"])
+        events.append(served)
+    return {"events": events, "next_after": len(events), "newest": len(events)}
+
+
+def pending_answer(events: list[dict[str, Any]]) -> Any:
+    from verdifax import pending_signoffs
+
+    try:
+        return pending_signoffs(events)
+    except VerdifaxError as refused:
+        assert "names no run" in str(refused)
+        return "error"
+
+
+def expected_pending(case: dict[str, Any]) -> Any:
+    return "error" if case["expected_error"] else case["expected_pending"]
+
+
+def test_the_pending_vector_is_the_shared_one():
+    shared = ROOT.parent / "scripts" / "sdk-pending-signoffs-vector.json"
+    if not shared.exists():
+        pytest.skip("the shared scripts folder is not beside this repository")
+    assert (Path(__file__).parent / "sdk-pending-signoffs-vector.json").read_bytes() == (
+        shared.read_bytes()
+    )
+    assert len(PENDING_VECTOR["cases"]) == 8
+
+
+@pytest.mark.parametrize("case", PENDING_VECTOR["cases"], ids=lambda case: case["name"])
+def test_pending_signoffs_answers_as_the_vector_says(case):
+    served = pending_feed(case)
+    assert pending_answer(served["events"]) == expected_pending(case)
+    # The same feed read through the client, as served.
+    page_read = sync_client(responder([], body=served)).get_signals()
+    assert pending_answer(page_read["events"]) == expected_pending(case)
+    followed = sync_client(feed_script([], [served])).follow_signals()
+    events = [next(followed) for _ in served["events"]]
+    assert pending_answer(events) == expected_pending(case)
+
+
+@pytest.mark.parametrize("case", PENDING_VECTOR["cases"], ids=lambda case: case["name"])
+async def test_async_pending_signoffs_answers_as_the_vector_says(case):
+    served = pending_feed(case)
+    async with async_client(feed_script([], [served, served])) as client:
+        page_read = await client.get_signals()
+        followed = client.follow_signals()
+        events = [await followed.__anext__() for _ in served["events"]]
+        await followed.aclose()
+    assert pending_answer(page_read["events"]) == expected_pending(case)
+    assert pending_answer(events) == expected_pending(case)
+
+
 # ── the README and CHANGELOG ──────────────────────────────────────────────────
 
 
@@ -1144,9 +1962,26 @@ def test_the_readme_states_the_signal_feed_facts():
         assert f"`verdifax.{name}(" in section, name
 
 
-def test_the_changelog_opens_with_1_14_0_and_the_earlier_releases_follow():
+def test_the_changelog_opens_with_1_15_0_and_the_earlier_releases_follow():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     newest = changelog.split("\n## ", 2)[1]
+    assert newest.startswith("1.15.0\n")
+    for phrase in (
+        "request_key.registered",
+        "request_key.rotated",
+        "request_key.cleared",
+        "request_key_approval",
+        "verdifax.feed-head.v1",
+        "SignalFollower",
+        "AsyncSignalFollower",
+        "rotate_account_request_key",
+        "after_event_hash",
+        "job_links",
+        "409",
+        "verdifax-python/1.15.0",
+    ):
+        assert phrase in newest, phrase
+    newest = changelog.split("\n## ", 3)[2]
     assert newest.startswith("1.14.0\n")
     for phrase in (
         "set_account_setting",
@@ -1162,7 +1997,7 @@ def test_the_changelog_opens_with_1_14_0_and_the_earlier_releases_follow():
         "lenient=1",
     ):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 3)[2]
+    newest = changelog.split("\n## ", 4)[3]
     assert newest.startswith("1.13.0\n")
     for phrase in (
         "pending_signoffs",
@@ -1172,15 +2007,15 @@ def test_the_changelog_opens_with_1_14_0_and_the_earlier_releases_follow():
         "v0.31.0",
     ):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 4)[3]
+    newest = changelog.split("\n## ", 5)[4]
     assert newest.startswith("1.12.0\n")
     for phrase in ("data_quality", "pending_signoffs", "lenient", "fallback", "get_public_signoff"):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 5)[4]
+    newest = changelog.split("\n## ", 6)[5]
     assert newest.startswith("1.11.0\n")
     for phrase in ("chain.interrupted", "v0.29.0", "2^53"):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 6)[5]
+    newest = changelog.split("\n## ", 7)[6]
     assert newest.startswith("1.10.0\n")
     for phrase in (
         "run.sealed",
@@ -1191,21 +2026,21 @@ def test_the_changelog_opens_with_1_14_0_and_the_earlier_releases_follow():
         "v0.28.0",
     ):
         assert phrase in newest, phrase
-    entry = changelog.split("\n## ", 7)[6]
+    entry = changelog.split("\n## ", 8)[7]
     assert entry.startswith("1.9.0\n")
     assert "aivp_trace_text" in entry
-    entry = changelog.split("\n## ", 8)[7]
+    entry = changelog.split("\n## ", 9)[8]
     assert entry.startswith("1.8.0\n")
     assert "decided_by" in entry
-    entry = changelog.split("\n## ", 9)[8]
+    entry = changelog.split("\n## ", 10)[9]
     assert entry.startswith("1.7.0\n")
     assert "public_receipt_url" in entry
-    assert changelog.split("\n## ", 10)[9].startswith("1.6.1\n")
-    entry = changelog.split("\n## ", 11)[10]
+    assert changelog.split("\n## ", 11)[10].startswith("1.6.1\n")
+    entry = changelog.split("\n## ", 12)[11]
     assert entry.startswith("1.6.0\n")
     for phrase in ("publish_run", "unpublish_run", "run.published", "run.unpublished", "v0.24.0"):
         assert phrase in entry, phrase
-    entry = changelog.split("\n## ", 12)[11]
+    entry = changelog.split("\n## ", 13)[12]
     assert entry.startswith("1.5.0\n")
     for phrase in (
         "feed keys",

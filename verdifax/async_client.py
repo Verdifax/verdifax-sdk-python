@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 from types import TracebackType
-from typing import Any, AsyncGenerator, Mapping, NoReturn, Optional, Sequence, Type, Union
+from typing import Any, Callable, Mapping, NoReturn, Optional, Sequence, Type, Union
 from urllib.parse import quote
 
 import httpx
@@ -46,6 +46,7 @@ from ._requests import (
     admin_erase_body,
     admin_key_body,
     admin_owner_key_replacement_path,
+    admin_run_deletion_answer,
     admin_run_deletion_path,
     attest_receipt,
     batch_body,
@@ -74,12 +75,13 @@ from ._signals import (
     FEED_KEYS_PATH,
     FOLLOW_WAIT_DEFAULT,
     WEBHOOKS_PATH,
+    AsyncSignalFollower,
+    FeedHead,
     SignalsRequest,
     deliveries_request,
     failure_receipt_path,
     feed_key_body,
     feed_key_path,
-    follow_async,
     follow_request,
     signal_page,
     signals_path,
@@ -287,9 +289,17 @@ class AsyncVerdifaxClient:
 
     async def rotate_request_key(self, new_signing_key: bytes) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.rotate_request_key`."""
+        return await self._rotate_request_key(
+            REQUEST_KEY_PATH, new_signing_key, "rotate_request_key"
+        )
+
+    async def _rotate_request_key(
+        self, path: str, new_signing_key: bytes, method: str
+    ) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient._rotate_request_key`."""
         new_key = load_signing_key(new_signing_key)
-        body = request_key_rotation_body(self._signing_key, new_key)
-        result = await self._send_json("POST", REQUEST_KEY_PATH, body)
+        body = request_key_rotation_body(self._signing_key, new_key, method)
+        result = await self._send_json("POST", path, body)
         self._signing_key = new_key
         return result
 
@@ -746,6 +756,12 @@ class AsyncVerdifaxClient:
         body = request_key_body(self._signing_key, "register_account_request_key")
         return await self._send_json("POST", ACCOUNT_REQUEST_KEY_PATH, body)
 
+    async def rotate_account_request_key(self, new_signing_key: bytes) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.rotate_account_request_key`."""
+        return await self._rotate_request_key(
+            ACCOUNT_REQUEST_KEY_PATH, new_signing_key, "rotate_account_request_key"
+        )
+
     async def clear_account_request_key(self) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.clear_account_request_key`."""
         result = await self._send_json(
@@ -927,21 +943,34 @@ class AsyncVerdifaxClient:
         return await self._read_signals(request)
 
     def follow_signals(
-        self, after: int = 0, wait: int = FOLLOW_WAIT_DEFAULT, as_owner: bool = False
-    ) -> AsyncGenerator[dict[str, Any], None]:
-        """Async version of :meth:`VerdifaxClient.follow_signals`: an async generator.
+        self,
+        after: int = 0,
+        wait: int = FOLLOW_WAIT_DEFAULT,
+        as_owner: bool = False,
+        on_head: Optional[Callable[[FeedHead], None]] = None,
+        after_event_hash: Optional[str] = None,
+    ) -> AsyncSignalFollower:
+        """Async version of :meth:`VerdifaxClient.follow_signals`: an async iterator.
 
-        Use it with ``async for``. The arguments are checked when this is
-        called, before anything is sent. An error carries ``last_sequence``,
-        the last sequence read.
+        Use it with ``async for``; stop by leaving the loop, or with
+        ``aclose()``. The arguments are checked when this is called, before
+        anything is sent. An error carries ``last_sequence``, the last
+        sequence read, and ``head``, the head kept. A page's head statement
+        is never yielded as an event; the returned
+        :class:`~verdifax.AsyncSignalFollower` keeps a head by the same rule
+        as the sync client, holds it in ``head`` and passes each newly kept
+        one to ``on_head``; ``after_event_hash`` works as on the sync client.
         """
-        follow_request(after, wait, as_owner)
+        follow_request(after, wait, as_owner, on_head, after_event_hash)
 
         async def read_page(place: int) -> dict[str, Any]:
             request = signals_request(place, None, wait, as_owner, self.timeout)
             return await self._read_signals(request)
 
-        return follow_async(read_page, after, wait, f"GET {signals_path(as_owner)}")
+        source = f"GET {signals_path(as_owner)}"
+        return AsyncSignalFollower(
+            read_page, after, wait, source, on_head=on_head, after_event_hash=after_event_hash
+        )
 
     async def create_feed_key(self, name: str, expires_at: Optional[str] = None) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.create_feed_key`.
@@ -1010,7 +1039,9 @@ class AsyncVerdifaxClient:
 
     async def admin_delete_run(self, run_id: int) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.admin_delete_run`."""
-        return await self._send_json("POST", admin_run_deletion_path(run_id))
+        return admin_run_deletion_answer(
+            await self._send_json("POST", admin_run_deletion_path(run_id))
+        )
 
     async def admin_replace_owner_key(self, account_id: int) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.admin_replace_owner_key`. It never returns a link or a key."""
