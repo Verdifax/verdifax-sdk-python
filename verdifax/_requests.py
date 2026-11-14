@@ -540,7 +540,7 @@ _ACCOUNT_LABEL = re.compile(r"account-[1-9][0-9]*")
 def refuse_unsigned_owner_change(
     key: "Optional[Ed25519PrivateKey]", method: str
 ) -> "Ed25519PrivateKey":
-    """Refuse an owner's setting or deletion from a client with no signing key.
+    """Refuse an owner's setting, deletion or webhook change from a client with no signing key.
 
     The server refuses an owner's change that its request key did not sign
     (400), so that Verdifax, which never holds that key, cannot make one.
@@ -552,7 +552,7 @@ def refuse_unsigned_owner_change(
     if key is None:
         raise ValidationError(
             f"{method} needs a client with a signing_key: the owner key's request key "
-            "must sign every setting and deletion the owner decides"
+            "must sign every setting, deletion and webhook change the owner decides"
         )
     return key
 

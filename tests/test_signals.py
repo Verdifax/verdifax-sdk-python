@@ -495,9 +495,9 @@ def test_the_async_signature_matches_the_sync_one(name):
         ),
         ("create_feed_key", ["self", "name", "expires_at"]),
         ("revoke_feed_key", ["self", "id"]),
-        ("create_webhook", ["self", "url", "types"]),
+        ("create_webhook", ["self", "url", "types", "account_id"]),
         ("list_webhooks", ["self"]),
-        ("delete_webhook", ["self", "id"]),
+        ("delete_webhook", ["self", "id", "account_id"]),
         ("list_webhook_deliveries", ["self", "id", "limit"]),
         ("get_failure_receipt", ["self", "run_id"]),
     ],
@@ -862,24 +862,34 @@ def test_every_id_method_refuses_a_bad_id_without_a_request(bad):
 
 
 def test_create_webhook_takes_every_kind_by_default():
+    from tests.test_webhook_changes import webhook_server
+
     seen: list[httpx.Request] = []
-    client = sync_client(responder(seen, body=WEBHOOK, status=201))
-    assert client.create_webhook("https://hooks.example.com/verdifax") == WEBHOOK
-    client.create_webhook("https://hooks.example.com/verdifax", types=[])
+    client = sync_client(webhook_server(seen))
+    client.create_webhook("https://hooks.example.com/verdifax", account_id="account-7")
+    client.create_webhook("https://hooks.example.com/verdifax", types=[], account_id="account-7")
     assert [(r.method, r.url.path) for r in seen] == [("POST", "/account/webhooks")] * 2
-    assert sent_body(seen[0]) == {"url": "https://hooks.example.com/verdifax", "types": []}
-    assert sent_body(seen[1]) == {"url": "https://hooks.example.com/verdifax", "types": []}
+    for request in seen:
+        body = sent_body(request)
+        assert (body["url"], body["types"], set(body["owner_signature"])) == (
+            "https://hooks.example.com/verdifax",
+            [],
+            {"signature", "signed_at", "nonce"},
+        )
 
 
 def test_create_webhook_sends_the_kinds_named():
+    from tests.test_webhook_changes import webhook_server
+
     seen: list[httpx.Request] = []
-    client = sync_client(responder(seen, body=WEBHOOK, status=201))
-    client.create_webhook("https://h.example.com", types=["run.refused", "run.halted"])
-    client.create_webhook("https://h.example.com", types=tuple(SIGNAL_KINDS))
-    assert sent_body(seen[0]) == {
-        "url": "https://h.example.com",
-        "types": ["run.refused", "run.halted"],
-    }
+    client = sync_client(webhook_server(seen))
+    client.create_webhook(
+        "https://h.example.com", types=["run.refused", "run.halted"], account_id="account-7"
+    )
+    client.create_webhook(
+        "https://h.example.com", types=tuple(SIGNAL_KINDS), account_id="account-7"
+    )
+    assert sent_body(seen[0])["types"] == ["run.refused", "run.halted"]
     assert sent_body(seen[1])["types"] == list(SIGNAL_KINDS)
 
 
@@ -919,7 +929,7 @@ def test_create_webhook_raises_the_servers_refusal(status, error):
     seen: list[httpx.Request] = []
     client = sync_client(responder(seen, body={"error": error}, status=status))
     with pytest.raises(APIError, match=error) as caught:
-        client.create_webhook("https://h.example.com")
+        client.create_webhook("https://h.example.com", account_id="account-7")
     assert caught.value.status_code == status
     assert len(seen) == 1
 
@@ -936,14 +946,16 @@ def test_list_webhooks():
 
 
 def test_delete_webhook():
+    from tests.test_webhook_changes import webhook_server
+
     seen: list[httpx.Request] = []
-    answer = {"ok": True, "id": 3, "deleted": True}
-    assert sync_client(responder(seen, body=answer)).delete_webhook(3) == answer
-    assert (seen[0].method, seen[0].url.path, seen[0].content) == (
-        "DELETE",
-        "/account/webhooks/3",
-        b"",
-    )
+    answer = sync_client(webhook_server(seen)).delete_webhook(3, account_id="account-7")
+    assert answer["deleted"] is True
+    assert [(r.method, r.url.path) for r in seen] == [
+        ("GET", "/account/webhooks"),
+        ("DELETE", "/account/webhooks/3"),
+    ]
+    assert list(sent_body(seen[1])) == ["owner_signature"]
 
 
 def test_list_webhook_deliveries():
@@ -1010,9 +1022,7 @@ async def test_async_signal_methods_send_the_same_requests():
         assert await client.get_signals(after=4, limit=10, wait=25, as_owner=True) == page([], 4)
         assert await client.create_feed_key("siem", expires_at="2027-01-01T00:00:00Z") == FEED_KEY
         assert (await client.revoke_feed_key(9))["revoked"] is True
-        assert await client.create_webhook("https://h.example.com", ["key.created"]) == WEBHOOK
         assert await client.list_webhooks() == WEBHOOKS
-        assert (await client.delete_webhook(3))["deleted"] is True
         assert await client.list_webhook_deliveries(3, limit=5) == DELIVERIES
         assert await client.get_failure_receipt(42) == RECEIPT
     assert [(r.method, r.url.path, query(r)) for r in seen] == [
@@ -1020,15 +1030,12 @@ async def test_async_signal_methods_send_the_same_requests():
         ("GET", "/account/signals", "after=4&limit=10&wait=25"),
         ("POST", "/account/feed-keys", ""),
         ("DELETE", "/account/feed-keys/9", ""),
-        ("POST", "/account/webhooks", ""),
         ("GET", "/account/webhooks", ""),
-        ("DELETE", "/account/webhooks/3", ""),
         ("GET", "/account/webhooks/3/deliveries", "limit=5"),
         ("GET", "/runs/42/failure-receipt", ""),
     ]
     assert sent_body(seen[2]) == {"name": "siem", "expires_at": "2027-01-01T00:00:00Z"}
-    assert sent_body(seen[4]) == {"url": "https://h.example.com", "types": ["key.created"]}
-    assert seen[3].content == seen[6].content == b""
+    assert seen[3].content == b""
 
 
 async def test_async_the_http_timeout_is_at_least_the_wait_plus_30_seconds():
@@ -1962,9 +1969,19 @@ def test_the_readme_states_the_signal_feed_facts():
         assert f"`verdifax.{name}(" in section, name
 
 
-def test_the_changelog_opens_with_1_15_0_and_the_earlier_releases_follow():
+def test_the_changelog_opens_with_1_16_0_and_the_earlier_releases_follow():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     newest = changelog.split("\n## ", 2)[1]
+    assert newest.startswith("1.16.0\n")
+    for phrase in (
+        "webhook.subscribed",
+        "webhook.deleted",
+        "webhook_value",
+        "delete_webhook",
+        "verdifax-python/1.16.0",
+    ):
+        assert phrase in newest, phrase
+    newest = changelog.split("\n## ", 3)[2]
     assert newest.startswith("1.15.0\n")
     for phrase in (
         "request_key.registered",
@@ -1981,7 +1998,7 @@ def test_the_changelog_opens_with_1_15_0_and_the_earlier_releases_follow():
         "verdifax-python/1.15.0",
     ):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 3)[2]
+    newest = changelog.split("\n## ", 4)[3]
     assert newest.startswith("1.14.0\n")
     for phrase in (
         "set_account_setting",
@@ -1997,7 +2014,7 @@ def test_the_changelog_opens_with_1_15_0_and_the_earlier_releases_follow():
         "lenient=1",
     ):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 4)[3]
+    newest = changelog.split("\n## ", 5)[4]
     assert newest.startswith("1.13.0\n")
     for phrase in (
         "pending_signoffs",
@@ -2007,15 +2024,15 @@ def test_the_changelog_opens_with_1_15_0_and_the_earlier_releases_follow():
         "v0.31.0",
     ):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 5)[4]
+    newest = changelog.split("\n## ", 6)[5]
     assert newest.startswith("1.12.0\n")
     for phrase in ("data_quality", "pending_signoffs", "lenient", "fallback", "get_public_signoff"):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 6)[5]
+    newest = changelog.split("\n## ", 7)[6]
     assert newest.startswith("1.11.0\n")
     for phrase in ("chain.interrupted", "v0.29.0", "2^53"):
         assert phrase in newest, phrase
-    newest = changelog.split("\n## ", 7)[6]
+    newest = changelog.split("\n## ", 8)[7]
     assert newest.startswith("1.10.0\n")
     for phrase in (
         "run.sealed",
@@ -2026,21 +2043,21 @@ def test_the_changelog_opens_with_1_15_0_and_the_earlier_releases_follow():
         "v0.28.0",
     ):
         assert phrase in newest, phrase
-    entry = changelog.split("\n## ", 8)[7]
+    entry = changelog.split("\n## ", 9)[8]
     assert entry.startswith("1.9.0\n")
     assert "aivp_trace_text" in entry
-    entry = changelog.split("\n## ", 9)[8]
+    entry = changelog.split("\n## ", 10)[9]
     assert entry.startswith("1.8.0\n")
     assert "decided_by" in entry
-    entry = changelog.split("\n## ", 10)[9]
+    entry = changelog.split("\n## ", 11)[10]
     assert entry.startswith("1.7.0\n")
     assert "public_receipt_url" in entry
-    assert changelog.split("\n## ", 11)[10].startswith("1.6.1\n")
-    entry = changelog.split("\n## ", 12)[11]
+    assert changelog.split("\n## ", 12)[11].startswith("1.6.1\n")
+    entry = changelog.split("\n## ", 13)[12]
     assert entry.startswith("1.6.0\n")
     for phrase in ("publish_run", "unpublish_run", "run.published", "run.unpublished", "v0.24.0"):
         assert phrase in entry, phrase
-    entry = changelog.split("\n## ", 13)[12]
+    entry = changelog.split("\n## ", 14)[13]
     assert entry.startswith("1.5.0\n")
     for phrase in (
         "feed keys",

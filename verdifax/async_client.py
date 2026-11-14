@@ -75,6 +75,8 @@ from ._signals import (
     FEED_KEYS_PATH,
     FOLLOW_WAIT_DEFAULT,
     WEBHOOKS_PATH,
+    WEBHOOK_DELETED,
+    WEBHOOK_SUBSCRIBED,
     AsyncSignalFollower,
     FeedHead,
     SignalsRequest,
@@ -82,12 +84,17 @@ from ._signals import (
     failure_receipt_path,
     feed_key_body,
     feed_key_path,
+    find_webhook,
     follow_request,
     signal_page,
     signals_path,
     signals_request,
+    signed_webhook_body,
     webhook_body,
+    webhook_change_answer,
+    webhook_end_body,
     webhook_path,
+    webhook_value,
 )
 from ._signoffs import (
     APPROVERS_PATH,
@@ -984,18 +991,30 @@ class AsyncVerdifaxClient:
         return await self._send_json("DELETE", feed_key_path(id))
 
     async def create_webhook(
-        self, url: str, types: Optional[Sequence[str]] = None
+        self, url: str, types: Optional[Sequence[str]] = None, account_id: Optional[str] = None
     ) -> dict[str, Any]:
-        """Async version of :meth:`VerdifaxClient.create_webhook`."""
-        return await self._send_json("POST", WEBHOOKS_PATH, webhook_body(url, types))
+        """Async version of :meth:`VerdifaxClient.create_webhook`, signed by the owner's request key."""
+        key = refuse_unsigned_owner_change(self._signing_key, "create_webhook")
+        webhook_body(url, types)
+        account = await self._owner_account(account_id)
+        body = signed_webhook_body(key, account, url, types)
+        answer = await self._send_json("POST", WEBHOOKS_PATH, body)
+        return webhook_change_answer(
+            answer, body, WEBHOOK_SUBSCRIBED, webhook_value(body["url"], body["types"]), key
+        )
 
     async def list_webhooks(self) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.list_webhooks`."""
         return await self._get_json(WEBHOOKS_PATH)
 
-    async def delete_webhook(self, id: int) -> dict[str, Any]:
-        """Async version of :meth:`VerdifaxClient.delete_webhook`."""
-        return await self._send_json("DELETE", webhook_path(id))
+    async def delete_webhook(self, id: int, account_id: Optional[str] = None) -> dict[str, Any]:
+        """Async version of :meth:`VerdifaxClient.delete_webhook`, signed by the owner's request key."""
+        path = webhook_path(id)
+        key = refuse_unsigned_owner_change(self._signing_key, "delete_webhook")
+        account = await self._owner_account(account_id)
+        body, value = webhook_end_body(key, account, find_webhook(await self.list_webhooks(), id))
+        answer = await self._send_json("DELETE", path, body)
+        return webhook_change_answer(answer, body, WEBHOOK_DELETED, value, key)
 
     async def list_webhook_deliveries(self, id: int, limit: Optional[int] = None) -> dict[str, Any]:
         """Async version of :meth:`VerdifaxClient.list_webhook_deliveries`."""

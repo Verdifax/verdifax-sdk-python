@@ -74,6 +74,8 @@ from ._signals import (
     FEED_KEYS_PATH,
     FOLLOW_WAIT_DEFAULT,
     WEBHOOKS_PATH,
+    WEBHOOK_DELETED,
+    WEBHOOK_SUBSCRIBED,
     FeedHead,
     SignalFollower,
     SignalsRequest,
@@ -81,12 +83,17 @@ from ._signals import (
     failure_receipt_path,
     feed_key_body,
     feed_key_path,
+    find_webhook,
     follow_request,
     signal_page,
     signals_path,
     signals_request,
+    signed_webhook_body,
     webhook_body,
+    webhook_change_answer,
+    webhook_end_body,
     webhook_path,
+    webhook_value,
 )
 from ._signoffs import (
     APPROVERS_PATH,
@@ -1098,7 +1105,9 @@ class VerdifaxClient:
         machine, and the record seals the signature, so Verdifax, which never
         holds that key, cannot make the change itself. While
         ``owner-replacement`` is ``blocked``, Verdifax cannot replace or
-        revoke the account's owner key, or start a replacement. While
+        revoke the account's owner key, or start a replacement, and from
+        verifier v0.35.0's server release on it cannot clear the owner key's
+        request key either. While
         ``verdifax-deletion`` is ``blocked``, Verdifax cannot delete one of
         the account's records. Each change is sealed in the account's signal
         feed as an ``account.changed`` event, decided by the owner.
@@ -1834,45 +1843,96 @@ class VerdifaxClient:
         """
         return self._send_json("DELETE", feed_key_path(id))
 
-    def create_webhook(self, url: str, types: Optional[Sequence[str]] = None) -> dict[str, Any]:
+    def create_webhook(
+        self, url: str, types: Optional[Sequence[str]] = None, account_id: Optional[str] = None
+    ) -> dict[str, Any]:
         """Subscribe a webhook with ``POST /account/webhooks``.
 
-        Needs the account's owner key. Each event of the named kinds is sent
-        to ``url``, signed under the Standard Webhooks scheme; check each
+        Needs the account's owner key, and a client whose ``signing_key`` is
+        the owner key's request key. Each event of the named kinds is sent to
+        ``url``, signed under the Standard Webhooks scheme; check each
         delivery with :func:`verdifax.verify_webhook`. A delivery is a copy:
         the pull feed and the public log are the record.
 
+        From verifier v0.35.0's server release on, the subscription is added
+        only with its record in the account's feed, an ``account.changed``
+        event ``webhook.subscribed`` signed by the owner's request key, which
+        seals :func:`webhook_value`: the SHA-256 of ``url``, never the
+        address, and the kinds. Verdifax, which never holds that key, cannot
+        add a destination for the account's events. The new subscription
+        receives that event first.
+
         Args:
-            url: An ``https://`` address. The server checks it too.
+            url: An ``https://`` address, exactly as the server stores it:
+                the signature covers its SHA-256, and the server refuses
+                another form with a 400 naming the stored one.
             types: Signal kinds, each at most once. ``None`` or an empty list
                 takes every kind.
+            account_id: The account's label, such as ``account-7``. Without
+                it the client reads it from ``GET /account`` first.
 
         Returns:
             The subscription with ``secret`` (``whsec_`` and base64), which is
-            shown this once, ``id``, ``url``, ``types``, ``created_at`` and
-            ``hint``.
+            shown this once, ``id``, ``url``, ``types``, ``created_at``,
+            ``hint`` and ``account_change``, the sealed record, checked: it
+            must carry the change, the value, ``decided_by`` ``owner`` and the
+            owner's signature sent, with this client's public key.
 
         Raises:
-            ValidationError: If ``url`` does not start ``https://`` or
-                ``types`` is not a list of distinct signal kinds, before
-                anything is sent.
+            ValidationError: If ``url`` does not start ``https://``, ``types``
+                is not a list of distinct signal kinds, or this client has no
+                ``signing_key``, before anything is sent.
+            VerdifaxError: If the answer's record does not carry what was sent.
             APIError: For a non-2xx response: 400 for an address or type the
-                server refuses, 409 when the account holds ten already, 503
-                when the deployment has no KMS key.
+                server refuses or a signature it does not accept, 409 when the
+                account holds ten already, 503 when the deployment has no KMS
+                key.
         """
-        return self._send_json("POST", WEBHOOKS_PATH, webhook_body(url, types))
+        key = refuse_unsigned_owner_change(self._signing_key, "create_webhook")
+        webhook_body(url, types)
+        account = self._owner_account(account_id)
+        body = signed_webhook_body(key, account, url, types)
+        answer = self._send_json("POST", WEBHOOKS_PATH, body)
+        return webhook_change_answer(
+            answer, body, WEBHOOK_SUBSCRIBED, webhook_value(body["url"], body["types"]), key
+        )
 
     def list_webhooks(self) -> dict[str, Any]:
         """The account's webhooks, without their secrets, from ``GET /account/webhooks``."""
         return self._get_json(WEBHOOKS_PATH)
 
-    def delete_webhook(self, id: int) -> dict[str, Any]:
+    def delete_webhook(self, id: int, account_id: Optional[str] = None) -> dict[str, Any]:
         """Delete a webhook with ``DELETE /account/webhooks/{id}``.
 
+        Needs the account's owner key, and a client whose ``signing_key`` is
+        the owner key's request key. The client reads the subscription from
+        :meth:`list_webhooks` and signs ``webhook.deleted`` over its
+        :func:`webhook_value`; the removal is sealed in the account's feed,
+        and the removed subscription is not sent that event.
+
+        Args:
+            id: The webhook's id.
+            account_id: The account's label, such as ``account-7``. Without
+                it the client reads it from ``GET /account`` first.
+
+        Returns:
+            The server's object: ``ok``, ``id``, ``deleted`` and
+            ``account_change``, the sealed record, checked as
+            :meth:`create_webhook` checks it.
+
         Raises:
-            ValidationError: If ``id`` is not a positive integer.
+            ValidationError: If ``id`` is not a positive integer, or this
+                client has no ``signing_key``.
+            VerdifaxError: If the account holds no live webhook with this id,
+                or the answer's record does not carry what was sent.
+            APIError: For a non-2xx response.
         """
-        return self._send_json("DELETE", webhook_path(id))
+        path = webhook_path(id)
+        key = refuse_unsigned_owner_change(self._signing_key, "delete_webhook")
+        account = self._owner_account(account_id)
+        body, value = webhook_end_body(key, account, find_webhook(self.list_webhooks(), id))
+        answer = self._send_json("DELETE", path, body)
+        return webhook_change_answer(answer, body, WEBHOOK_DELETED, value, key)
 
     def list_webhook_deliveries(self, id: int, limit: Optional[int] = None) -> dict[str, Any]:
         """A webhook's delivery log from ``GET /account/webhooks/{id}/deliveries``.

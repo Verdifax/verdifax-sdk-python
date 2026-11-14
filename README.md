@@ -159,9 +159,9 @@ asyncio.run(main())
 | `follow_signals(after=0, wait=25, as_owner=False, on_head=None, after_event_hash=None)` | `GET /signals`, page after page; with `as_owner=True`, `GET /account/signals` | feed key, or owner key |
 | `create_feed_key(name, expires_at=None)` | `POST /account/feed-keys` | owner key |
 | `revoke_feed_key(id)` | `DELETE /account/feed-keys/{id}` | owner key |
-| `create_webhook(url, types=None)` | `POST /account/webhooks` | owner key |
+| `create_webhook(url, types=None, account_id=None)` | `POST /account/webhooks` | owner key, signed by its request key |
 | `list_webhooks()` | `GET /account/webhooks` | owner key |
-| `delete_webhook(id)` | `DELETE /account/webhooks/{id}` | owner key |
+| `delete_webhook(id, account_id=None)` | `DELETE /account/webhooks/{id}` | owner key, signed by its request key |
 | `list_webhook_deliveries(id, limit=None)` | `GET /account/webhooks/{id}/deliveries` | owner key |
 | `get_failure_receipt(run_id)` | `GET /runs/{run_id}/failure-receipt` | required |
 | `admin_create_account(name, tier=None, expires_at=None)` | `POST /admin/accounts` | admin |
@@ -174,7 +174,7 @@ asyncio.run(main())
 | `admin_replace_owner_key(account_id)` | `POST /admin/accounts/{id}/owner-key/replace` | admin |
 | `admin_erase(...)` | `POST /admin/erase` | admin |
 
-These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `policy_activation_preimage`, `owner_change_preimage`, `policy_activation_approval`, `signoff_preimage`, `approver_key_proof`, `signal_event_hash`, `verify_webhook`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
+These functions make no request: `verdifax.research.capture_environment`, `format_provider_payload`, `sign_request`, `sign_request_v2`, `request_key_registration_body`, `request_signature_preimage`, `request_signature_preimage_v2`, `request_key_change_preimage`, `policy_activation_preimage`, `owner_change_preimage`, `policy_activation_approval`, `signoff_preimage`, `approver_key_proof`, `signal_event_hash`, `verify_webhook`, `webhook_value`, `generate_request_key`, `validate_hex64`, `validate_route_id`, and in `verdifax.section0`, `dse_dispatch_hash`, `dcae_closure_hash` and `cres_receipt_hash`. `RUN_STATUSES` lists every run status the server uses.
 
 `get_run_artifacts`, `get_public_bundle` and `get_public_bundle_by_token` return the exact JSON text the server sent, so you can save it and check it with `verdifax-verify`.
 
@@ -455,7 +455,7 @@ An administrator can put a new customer key in an existing account with `admin_c
 
 ### Owner settings and deleting records
 
-The owner decides two blocks on Verdifax. While `owner-replacement` is `blocked`, Verdifax cannot replace or revoke the account's owner key, or start a replacement. While `verdifax-deletion` is `blocked`, Verdifax cannot delete one of the account's records. `get_account()` returns both, as `owner_replacement` and `verdifax_deletion`, each `allowed` or `blocked`.
+The owner decides two blocks on Verdifax. While `owner-replacement` is `blocked`, Verdifax cannot replace or revoke the account's owner key, or start a replacement, and from verifier v0.35.0's server release on it cannot clear the owner key's request key either. While `verdifax-deletion` is `blocked`, Verdifax cannot delete one of the account's records. `get_account()` returns both, as `owner_replacement` and `verdifax_deletion`, each `allowed` or `blocked`.
 
 ```python
 owner = VerdifaxClient(api_key=owner_secret, signing_key=owner_signing_key)
@@ -562,7 +562,9 @@ Save a page with `json.dump(client.get_signals(), file)`. `verdifax-verify --sig
 
 ### Webhooks
 
-The owner key subscribes a webhook with `create_webhook(url, types=None)`. The url must start `https://`, and `types` lists signal kinds from `verdifax.SIGNAL_KINDS`, each at most once; with no types the webhook takes every kind. The server checks the address too, and answers 409 when the account holds ten webhooks already. The answer carries the webhook's `secret`, shown this once. `list_webhooks()`, `delete_webhook(id)` and `list_webhook_deliveries(id, limit=None)` manage the subscriptions and show each delivery's attempts.
+The owner key subscribes a webhook with `create_webhook(url, types=None, account_id=None)`, from a client whose `signing_key` is the owner key's request key. The url must start `https://`, and `types` lists signal kinds from `verdifax.SIGNAL_KINDS`, each at most once; with no types the webhook takes every kind. The server checks the address too, and answers 409 when the account holds ten webhooks already. The answer carries the webhook's `secret`, shown this once. `list_webhooks()`, `delete_webhook(id, account_id=None)` and `list_webhook_deliveries(id, limit=None)` manage the subscriptions and show each delivery's attempts.
+
+From verifier v0.35.0's server release on, a webhook is added and removed only with its record in the account's feed: an `account.changed` event, `webhook.subscribed` or `webhook.deleted`, signed by the owner's request key over `verdifax.webhook_value(url, types)`, which is `sha256=` and the SHA-256 of the address exactly as sent, then ` kinds=` and the kinds sorted and joined with commas, or `all`. The record never holds the address, which can carry a token. Verdifax, which never holds the owner's request key, cannot add a destination for the account's events. Send the address exactly as the server stores it: the server refuses another form with a 400 naming the stored one. `create_webhook` signs it; `delete_webhook` reads the subscription from `list_webhooks()` and signs its value; both check the sealed record in the answer and raise `VerdifaxError` if it does not carry what was sent. A new subscription receives its own record's event first, and a removed one is not sent the event that removes it. `verdifax-verify --signals` lists the subscriptions in place at the end of a feed read from its start. The shared vector `tests/sdk-webhook-change-vector.json` fixes the value for all four SDKs.
 
 A delivery is a copy: the pull feed and the public log are the record. Check every delivery before acting on it:
 

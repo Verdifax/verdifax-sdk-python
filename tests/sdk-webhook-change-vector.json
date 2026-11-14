@@ -1,0 +1,44 @@
+{
+ "_comment": "Round 62: the value every SDK signs, and the server seals, when the owner adds or removes a webhook. It is sha256=<the SHA-256 of the address exactly as sent, as lowercase hex> kinds=<the types sorted and joined with commas, or all for none>. The owner's request key signs the change (subscribe or delete below) with this value as its subject, over the same preimage as a setting, so Verdifax cannot add a destination for the account's events. The record never holds the address. Every SDK reads this file in a test (R266).",
+ "changes": {
+  "subscribe": "webhook.subscribed",
+  "delete": "webhook.deleted"
+ },
+ "cases": [
+  {
+   "name": "every kind",
+   "url": "https://hooks.example.com/in",
+   "types": null,
+   "value": "sha256=5d838a1ceaf722de0585104fc96a445532dae7b41323c477285e9d2e29983ee0 kinds=all"
+  },
+  {
+   "name": "an empty list takes every kind",
+   "url": "https://hooks.example.com/in",
+   "types": [],
+   "value": "sha256=5d838a1ceaf722de0585104fc96a445532dae7b41323c477285e9d2e29983ee0 kinds=all"
+  },
+  {
+   "name": "kinds are sorted",
+   "url": "https://hooks.example.com/in",
+   "types": [
+    "run.refused",
+    "account.changed"
+   ],
+   "value": "sha256=5d838a1ceaf722de0585104fc96a445532dae7b41323c477285e9d2e29983ee0 kinds=account.changed,run.refused"
+  },
+  {
+   "name": "an address with a token, which the record never shows",
+   "url": "https://receiver.example.net/hook/3f9c2e/rd20261113?key=s3cret",
+   "types": [
+    "run.sealed"
+   ],
+   "value": "sha256=31a978dd3f18ebde1b42cce20dd00aff33d87fb0fdc01d8d874158f3805e57a8 kinds=run.sealed"
+  },
+  {
+   "name": "a non-ASCII path is hashed as its UTF-8 bytes",
+   "url": "https://hooks.example.com/café",
+   "types": null,
+   "value": "sha256=06864b5fa4868c12cd74283f372c9d4b52ee341c4213df9889612c78599ac859 kinds=all"
+  }
+ ]
+}

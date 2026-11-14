@@ -341,6 +341,12 @@
       "node": "rotateAccountRequestKey",
       "python": "rotate_account_request_key",
       "r": "verdifax_rotate_account_request_key"
+    },
+    "webhook_value": {
+      "go": "WebhookValue",
+      "node": "webhookValue",
+      "python": "webhook_value",
+      "r": "verdifax_webhook_value"
     }
   },
   "notes": {

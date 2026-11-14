@@ -28,7 +28,7 @@ import hmac
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
@@ -45,7 +45,8 @@ from typing import (
     Union,
 )
 
-from ._requests import RunDeletion, account_key_body, run_deletion
+from ._requests import RunDeletion, _check_owner_record, account_key_body, run_deletion
+from ._signing import owner_change_signature
 from ._signoffs import _text
 from ._validation import validate_hex64, validate_positive_id
 from .exceptions import ValidationError, VerdifaxError, WebhookVerificationError
@@ -589,6 +590,77 @@ def webhook_body(url: Any, types: Any = None) -> dict[str, Any]:
     else:
         raise ValidationError(f"types must be a list of signal kinds, got {type(types).__name__}")
     return {"url": url, "types": kinds}
+
+
+# Round 62: the owner adds or removes a webhook only with a record in the
+# account's feed, signed by the owner key's request key, so Verdifax cannot add
+# a destination for the account's events. The record seals webhook_value,
+# never the address, which can carry a token.
+WEBHOOK_SUBSCRIBED = "webhook.subscribed"
+WEBHOOK_DELETED = "webhook.deleted"
+
+
+def webhook_value(url: str, types: Sequence[str]) -> str:
+    """The value a webhook change seals and the owner signs.
+
+    ``sha256=`` and the SHA-256 of the address exactly as sent, as lowercase
+    hex, then `` kinds=`` and the types sorted and joined with commas, or
+    ``all`` when none are named. Fixed by scripts/sdk-webhook-change-vector.json.
+    """
+    kinds = ",".join(sorted(types)) or "all"
+    return "sha256=" + hashlib.sha256(url.encode("utf-8")).hexdigest() + " kinds=" + kinds
+
+
+def signed_webhook_body(key: Any, account: str, url: Any, types: Any = None) -> dict[str, Any]:
+    """The body of ``POST /account/webhooks``, signed over ``webhook.subscribed``."""
+    body = webhook_body(url, types)
+    body["owner_signature"] = owner_change_signature(
+        key, account, WEBHOOK_SUBSCRIBED, webhook_value(body["url"], body["types"])
+    )
+    return body
+
+
+def find_webhook(listing: Any, id: int) -> Mapping[str, Any]:
+    """The live subscription with this id in ``GET /account/webhooks``'s answer.
+
+    Raises:
+        VerdifaxError: If the account holds no live subscription with this id.
+    """
+    for hook in (listing or {}).get("webhooks") or []:
+        if isinstance(hook, Mapping) and hook.get("id") == id:
+            return hook
+    raise VerdifaxError(f"the account holds no webhook {id}")
+
+
+def webhook_end_body(key: Any, account: str, hook: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+    """The body of ``DELETE /account/webhooks/{id}``, signed over
+    ``webhook.deleted`` and the subscription's value, and that value."""
+    value = webhook_value(hook["url"], hook.get("types") or [])
+    return {"owner_signature": owner_change_signature(key, account, WEBHOOK_DELETED, value)}, value
+
+
+def webhook_change_answer(
+    answer: Any, sent: Mapping[str, Any], change: str, value: str, key: Any
+) -> dict[str, Any]:
+    """The answer to a webhook change, checked against what was sent.
+
+    The sealed record must carry the change, the value, ``decided_by``
+    ``owner`` and the owner's signature that was sent.
+
+    Raises:
+        VerdifaxError: If the answer has no ``account_change`` record, or the
+            record does not carry what was sent.
+    """
+    record = answer.get("account_change") if isinstance(answer, Mapping) else None
+    if not isinstance(record, Mapping):
+        raise VerdifaxError(
+            "the server's answer has no account_change record for the webhook change"
+        )
+    _check_owner_record(
+        record, sent, key, "webhook change record", {"action": change, "value": value}
+    )
+    checked: dict[str, Any] = answer
+    return checked
 
 
 def webhook_path(id: Any, suffix: str = "") -> str:

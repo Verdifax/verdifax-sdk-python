@@ -40,6 +40,7 @@ from ._signals import (
     pending_signoffs,
     signal_event_hash,
     verify_webhook,
+    webhook_value,
 )
 from ._signoffs import approver_key_proof, signoff_preimage
 from ._signing import (
@@ -313,4 +314,5 @@ __all__ = [
     "verify",
     "verify_run",
     "verify_webhook",
+    "webhook_value",
 ]
